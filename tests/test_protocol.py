@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import pytest
 
-from mcp_test_driver.protocol import McpSession
+from mcp_test_driver.protocol import McpError, McpSession, _check_error
 
 
 class FakeTransport:
@@ -83,9 +83,7 @@ class TestMcpSession:
         assert transport.notifications[0]["method"] == "notifications/initialized"
 
     def test_initialize_stores_server_info(self) -> None:
-        transport = FakeTransport(
-            [self._server_info_response("my-server", "2.0")]
-        )
+        transport = FakeTransport([self._server_info_response("my-server", "2.0")])
         session = McpSession(transport)
         session.initialize()
 
@@ -132,10 +130,12 @@ class TestMcpSession:
         assert result is None
 
     def test_id_sequence_increments(self) -> None:
-        transport = FakeTransport([
-            self._server_info_response(),
-            self._tools_response(),
-        ])
+        transport = FakeTransport(
+            [
+                self._server_info_response(),
+                self._tools_response(),
+            ]
+        )
         session = McpSession(transport)
         session.initialize()
         session.list_tools()
@@ -144,10 +144,12 @@ class TestMcpSession:
         assert transport.sent[1]["id"] == 2
 
     def test_reconnect_resets_id_and_calls_transport(self) -> None:
-        transport = FakeTransport([
-            self._server_info_response(),
-            self._tools_response(),
-        ])
+        transport = FakeTransport(
+            [
+                self._server_info_response(),
+                self._tools_response(),
+            ]
+        )
         session = McpSession(transport)
         session._id_seq = 42
 
@@ -158,3 +160,86 @@ class TestMcpSession:
         assert transport.sent[0]["id"] == 1
         assert transport.sent[1]["id"] == 2
         assert len(tools) == 1
+
+
+class TestCheckError:
+    """Tests for JSON-RPC error response detection."""
+
+    def test_no_error_field(self) -> None:
+        _check_error({"jsonrpc": "2.0", "id": 1, "result": {}})
+
+    def test_error_field_raises(self) -> None:
+        resp = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "error": {"code": -32600, "message": "Invalid Request"},
+        }
+        with pytest.raises(McpError) as exc_info:
+            _check_error(resp)
+        assert exc_info.value.code == -32600
+        assert "Invalid Request" in str(exc_info.value)
+
+    def test_error_with_data(self) -> None:
+        resp = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "error": {
+                "code": -32603,
+                "message": "Internal error",
+                "data": "details here",
+            },
+        }
+        with pytest.raises(McpError) as exc_info:
+            _check_error(resp)
+        assert exc_info.value.data == "details here"
+
+    def test_error_field_non_dict_ignored(self) -> None:
+        # error field is present but not a dict — not a real error
+        _check_error({"jsonrpc": "2.0", "id": 1, "error": "string"})
+
+
+class TestMcpSessionRobustness:
+    """Tests for protocol-level error handling."""
+
+    def test_initialize_with_error_response(self) -> None:
+        resp = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "error": {"code": -32600, "message": "Bad request"},
+        }
+        transport = FakeTransport([resp])
+        session = McpSession(transport)
+        with pytest.raises(McpError, match="Bad request"):
+            session.initialize()
+
+    def test_list_tools_with_error_response(self) -> None:
+        resp = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "error": {"code": -32601, "message": "Method not found"},
+        }
+        transport = FakeTransport([resp])
+        session = McpSession(transport)
+        with pytest.raises(McpError, match="Method not found"):
+            session.list_tools()
+
+    def test_initialize_with_missing_result(self) -> None:
+        resp = {"jsonrpc": "2.0", "id": 1}
+        transport = FakeTransport([resp])
+        session = McpSession(transport)
+        with pytest.raises(ConnectionError, match="invalid initialize response"):
+            session.initialize()
+
+    def test_list_tools_with_empty_result(self) -> None:
+        resp = {"jsonrpc": "2.0", "id": 1, "result": {}}
+        transport = FakeTransport([resp])
+        session = McpSession(transport)
+        tools = session.list_tools()
+        assert tools == []
+
+    def test_list_tools_with_non_list_tools(self) -> None:
+        resp = {"jsonrpc": "2.0", "id": 1, "result": {"tools": "not a list"}}
+        transport = FakeTransport([resp])
+        session = McpSession(transport)
+        tools = session.list_tools()
+        assert tools == []

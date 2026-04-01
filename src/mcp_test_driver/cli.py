@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import sys
+from typing import Any
 
 
 USAGE = """\
@@ -28,37 +29,62 @@ def main() -> None:
 
     target = sys.argv[1]
 
-    if target.startswith("http://") or target.startswith("https://"):
-        _run_http(target)
-    else:
-        _run_stdio(sys.argv[1:])
+    try:
+        if target.startswith("http://") or target.startswith("https://"):
+            _run_http(target)
+        else:
+            _run_stdio(sys.argv[1:])
+    except KeyboardInterrupt:
+        print()
+        sys.exit(130)
 
 
 def _run_stdio(command: list[str]) -> None:
-    from .protocol import McpSession
-    from .repl import Repl
-    from .transport import StdioTransport
+    from .transport import StdioTransport, TransportError
 
-    transport = StdioTransport(command)
     try:
-        session = McpSession(transport)
-        session.initialize()
-        repl = Repl(session)
-        repl.run()
+        transport = StdioTransport(command)
+    except TransportError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        _run_session(transport)
     finally:
         transport.close()
 
 
 def _run_http(url: str) -> None:
-    from .protocol import McpSession
-    from .repl import Repl
     from .transport import HttpTransport
 
-    transport = HttpTransport(url)
+    try:
+        transport = HttpTransport(url)
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        _run_session(transport)
+    finally:
+        transport.close()
+
+
+def _run_session(transport: Any) -> None:
+    from .protocol import McpError, McpSession
+    from .repl import Repl
+    from .transport import TransportError
+
     try:
         session = McpSession(transport)
         session.initialize()
         repl = Repl(session)
         repl.run()
-    finally:
-        transport.close()
+    except TransportError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+    except McpError as e:
+        print(f"MCP error: {e}", file=sys.stderr)
+        sys.exit(1)
+    except ConnectionError as e:
+        print(f"Connection error: {e}", file=sys.stderr)
+        sys.exit(1)

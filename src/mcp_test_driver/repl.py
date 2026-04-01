@@ -16,6 +16,7 @@ from .completion import (
     setup_readline,
 )
 from .parse import parse_args
+from .transport import TransportError
 
 if TYPE_CHECKING:
     from .protocol import McpSession
@@ -43,11 +44,35 @@ class SessionCache:
 
 
 def _print_result(resp: dict[str, Any]) -> None:
-    result = resp.get("result", {})
+    # Check for JSON-RPC error response
+    error = resp.get("error")
+    if isinstance(error, dict):
+        code = error.get("code", "?")
+        message = error.get("message", "Unknown error")
+        print(red(f"Server error [{code}]: {message}"))
+        data = error.get("data")
+        if data:
+            print(red(f"  {data}"))
+        return
+
+    result = resp.get("result")
+    if not isinstance(result, dict):
+        # No result and no error — unusual but not fatal
+        if result is not None:
+            print(str(result))
+        return
+
     is_error = result.get("isError", False)
-    content = result.get("content", [])
+    content = result.get("content")
+    if not isinstance(content, list):
+        return
+
     for item in content:
+        if not isinstance(item, dict):
+            continue
         text = item.get("text", "")
+        if not isinstance(text, str):
+            text = str(text)
         if is_error:
             print(red(f"Error: {text}"))
         else:
@@ -89,22 +114,25 @@ class Repl:
             if not line:
                 continue
 
-            # Dispatch dot-commands
             parts = line.split(None, 1)
             cmd = parts[0]
             rest = parts[1] if len(parts) > 1 else ""
 
-            # Resolve aliases
             if cmd in DOT_COMMAND_ALIASES:
                 cmd = DOT_COMMAND_ALIASES[cmd]
 
-            if cmd.startswith("."):
-                if not self._dispatch_dot(cmd, rest):
-                    break
-                continue
-
-            # Tool invocation
-            self._invoke_tool(cmd, rest)
+            try:
+                if cmd.startswith("."):
+                    if not self._dispatch_dot(cmd, rest):
+                        break
+                else:
+                    self._invoke_tool(cmd, rest)
+            except TransportError as e:
+                print(red(f"Transport error: {e}"))
+            except ConnectionError as e:
+                print(red(f"Connection lost: {e}"))
+            except Exception as e:
+                print(red(f"Unexpected error: {type(e).__name__}: {e}"))
 
     def _dispatch_dot(self, cmd: str, rest: str) -> bool:
         """Handle a dot-command.  Returns False if the REPL should exit."""
@@ -130,14 +158,13 @@ class Repl:
     def _cmd_help(self, rest: str) -> None:
         rest = rest.strip()
         if rest:
-            # Context help: parse as if it were a partial command line
             show_context_help_for(self.cache.completion, rest)
         else:
             _show_general_help()
 
     def _cmd_list(self) -> None:
         for t in self.cache.tools:
-            name = str(t["name"])
+            name = str(t.get("name", "?"))
             desc = str(t.get("description", ""))
             print(f"  {bold(name)}: {dim(desc)}")
 

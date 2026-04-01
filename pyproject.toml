@@ -63,5 +63,8 @@ env_list = ["py312", "py313", "py314"]
 deps = ["pytest"]
 commands = [["pytest", { replace = "posargs", default = ["tests/"], extend = true }]]
 
+[tool.ty.src]
+include = ["src/"]
+
 [tool.uv]
 exclude-newer = "3 days"

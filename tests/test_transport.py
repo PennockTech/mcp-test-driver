@@ -11,7 +11,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from mcp_test_driver.transport import HttpTransport, StdioTransport, _frame
+from mcp_test_driver.transport import (
+    HttpTransport,
+    StdioTransport,
+    TransportError,
+    _frame,
+)
 
 
 class TestFrame:
@@ -80,7 +85,7 @@ class TestStdioTransport:
         assert proc is not None
         transport.close()
         assert transport._proc is None
-        proc.wait.assert_called_once()
+        proc.wait.assert_called_once()  # type: ignore[union-attr]
 
     def test_close_idempotent(self) -> None:
         transport = self._make_transport([])
@@ -104,9 +109,7 @@ class TestStdioTransport:
         assert transport._proc is not old_proc
 
     def test_trace_on_sends_to_stderr(self, capsys: pytest.CaptureFixture) -> None:  # type: ignore[type-arg]
-        transport = self._make_transport(
-            [{"jsonrpc": "2.0", "id": 1, "result": {}}]
-        )
+        transport = self._make_transport([{"jsonrpc": "2.0", "id": 1, "result": {}}])
         transport.trace = True
         transport.request({"jsonrpc": "2.0", "id": 1, "method": "test"})
         captured = capsys.readouterr()
@@ -114,9 +117,7 @@ class TestStdioTransport:
         assert "<<<" in captured.err
 
     def test_trace_off_no_stderr(self, capsys: pytest.CaptureFixture) -> None:  # type: ignore[type-arg]
-        transport = self._make_transport(
-            [{"jsonrpc": "2.0", "id": 1, "result": {}}]
-        )
+        transport = self._make_transport([{"jsonrpc": "2.0", "id": 1, "result": {}}])
         transport.trace = False
         transport.request({"jsonrpc": "2.0", "id": 1, "method": "test"})
         captured = capsys.readouterr()
@@ -266,5 +267,99 @@ class TestHttpTransport:
         transport._pool = MagicMock()
         transport._pool.request.return_value = mock_resp
 
-        with pytest.raises(ValueError, match="Unexpected Content-Type"):
+        with pytest.raises(TransportError, match="Unexpected Content-Type"):
             transport.request({"jsonrpc": "2.0", "id": 1, "method": "test"})
+
+
+class TestStdioTransportRobustness:
+    """Tests for error handling in StdioTransport."""
+
+    def test_command_not_found_raises_transport_error(self) -> None:
+        with pytest.raises(TransportError, match="Command not found"):
+            StdioTransport(["/nonexistent/binary/xyz"])
+
+    def test_broken_pipe_raises_transport_error(self) -> None:
+        mock_stdin = MagicMock()
+        mock_stdin.write.side_effect = BrokenPipeError()
+        mock_stdout = io.BytesIO()
+
+        mock_proc = MagicMock()
+        mock_proc.stdin = mock_stdin
+        mock_proc.stdout = mock_stdout
+        mock_proc.wait = MagicMock()
+
+        with patch(
+            "mcp_test_driver.transport.subprocess.Popen", return_value=mock_proc
+        ):
+            transport = StdioTransport(["fake"])
+
+        transport.trace = False
+        with pytest.raises(TransportError, match="Server process has exited"):
+            transport.request({"jsonrpc": "2.0", "id": 1, "method": "test"})
+
+    def test_malformed_json_returns_none(self) -> None:
+        mock_stdout = io.BytesIO(b"not json at all\n")
+        mock_stdin = io.BytesIO()
+
+        mock_proc = MagicMock()
+        mock_proc.stdin = mock_stdin
+        mock_proc.stdout = mock_stdout
+        mock_proc.wait = MagicMock()
+
+        with patch(
+            "mcp_test_driver.transport.subprocess.Popen", return_value=mock_proc
+        ):
+            transport = StdioTransport(["fake"])
+
+        transport.trace = False
+        result = transport.request({"jsonrpc": "2.0", "id": 1, "method": "test"})
+        assert result is None
+
+    def test_send_after_close_raises(self) -> None:
+        mock_proc = MagicMock()
+        mock_proc.stdin = io.BytesIO()
+        mock_proc.stdout = io.BytesIO()
+        mock_proc.wait = MagicMock()
+
+        with patch(
+            "mcp_test_driver.transport.subprocess.Popen", return_value=mock_proc
+        ):
+            transport = StdioTransport(["fake"])
+
+        transport.trace = False
+        transport.close()
+        with pytest.raises(TransportError, match="Not connected"):
+            transport.request({"jsonrpc": "2.0", "id": 1, "method": "test"})
+
+
+class TestHttpTransportRobustness:
+    """Tests for error handling in HttpTransport."""
+
+    def test_connection_failure_raises_transport_error(self) -> None:
+        import urllib3.exceptions
+
+        transport = HttpTransport("https://localhost:1/nonexistent")
+        transport.trace = False
+        transport._pool = MagicMock()
+        transport._pool.request.side_effect = urllib3.exceptions.MaxRetryError(
+            pool=None, url="/", reason=Exception("Connection refused")  # type: ignore[arg-type]
+        )
+
+        with pytest.raises(TransportError, match="Connection failed"):
+            transport.request({"jsonrpc": "2.0", "id": 1, "method": "test"})
+
+    def test_malformed_json_response_returns_none(self) -> None:
+        transport = HttpTransport("https://example.com/mcp")
+        transport.trace = False
+
+        mock_resp = MagicMock()
+        mock_resp.headers = {"Content-Type": "application/json"}
+        mock_resp.status = 200
+        mock_resp.read.return_value = b"not json"
+        mock_resp.release_conn = MagicMock()
+
+        transport._pool = MagicMock()
+        transport._pool.request.return_value = mock_resp
+
+        result = transport.request({"jsonrpc": "2.0", "id": 1, "method": "test"})
+        assert result is None

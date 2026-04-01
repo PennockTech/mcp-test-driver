@@ -6,10 +6,31 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from .color import bold_err, eprint
+from .color import bold_err, eprint, red
 
 if TYPE_CHECKING:
     from .transport import Transport
+
+
+class McpError(Exception):
+    """Raised when the MCP server returns a JSON-RPC error."""
+
+    def __init__(self, code: int, message: str, data: Any = None) -> None:
+        self.code = code
+        self.message = message
+        self.data = data
+        super().__init__(f"MCP error {code}: {message}")
+
+
+def _check_error(resp: dict[str, Any]) -> None:
+    """Raise McpError if the response contains a JSON-RPC error."""
+    error = resp.get("error")
+    if error and isinstance(error, dict):
+        raise McpError(
+            code=error.get("code", -1),
+            message=error.get("message", "Unknown error"),
+            data=error.get("data"),
+        )
 
 
 class McpSession:
@@ -47,12 +68,28 @@ class McpSession:
         )
         if resp is None:
             raise ConnectionError("Server closed connection during initialize")
-        result = resp.get("result", {})
+        _check_error(resp)
+        result = resp.get("result")
+        if not isinstance(result, dict):
+            raise ConnectionError("Server returned invalid initialize response")
         info = result.get("serverInfo", {})
-        self.server_info = info
+        if isinstance(info, dict):
+            self.server_info = info
         eprint(
-            bold_err(f"Connected: {info.get('name', '?')} {info.get('version', '')}")
+            bold_err(
+                f"Connected: {info.get('name', '?')} {info.get('version', '')}"
+                if isinstance(info, dict)
+                else "Connected: (unknown server)"
+            )
         )
+        server_version = result.get("protocolVersion", "")
+        if server_version and server_version != self.PROTOCOL_VERSION:
+            eprint(
+                red(
+                    f"Warning: server protocol version {server_version} "
+                    f"differs from client {self.PROTOCOL_VERSION}"
+                )
+            )
         self.transport.notify(
             {
                 "jsonrpc": "2.0",
@@ -74,8 +111,13 @@ class McpSession:
         )
         if resp is None:
             raise ConnectionError("Server closed connection during tools/list")
+        _check_error(resp)
         result = resp.get("result", {})
-        return result.get("tools", [])
+        if isinstance(result, dict):
+            tools = result.get("tools", [])
+            if isinstance(tools, list):
+                return tools
+        return []
 
     def call_tool(
         self,

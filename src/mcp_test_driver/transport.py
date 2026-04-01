@@ -13,7 +13,14 @@ import json
 import subprocess
 from typing import Any, Protocol
 
-from .color import bold_err, cyan, eprint, yellow
+from .color import bold_err, cyan, eprint, red, yellow
+
+# Default timeout for HTTP requests (seconds).
+HTTP_TIMEOUT = 30.0
+
+
+class TransportError(Exception):
+    """Raised when a transport-level error occurs."""
 
 
 class Transport(Protocol):
@@ -52,27 +59,47 @@ class StdioTransport:
         self._launch()
 
     def _launch(self) -> None:
-        self._proc = subprocess.Popen(
-            self._command,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-        )
+        try:
+            self._proc = subprocess.Popen(
+                self._command,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+            )
+        except FileNotFoundError:
+            raise TransportError(f"Command not found: {self._command[0]}") from None
+        except PermissionError:
+            raise TransportError(f"Permission denied: {self._command[0]}") from None
+        except OSError as e:
+            raise TransportError(f"Cannot start {self._command[0]}: {e}") from None
 
     def _send(self, obj: dict[str, Any]) -> None:
-        assert self._proc is not None
-        assert self._proc.stdin is not None
+        if self._proc is None or self._proc.stdin is None:
+            raise TransportError("Not connected")
         if self.trace:
             eprint(cyan(f">>> {json.dumps(obj)}"))
-        self._proc.stdin.write(_frame(obj))
-        self._proc.stdin.flush()
+        try:
+            self._proc.stdin.write(_frame(obj))
+            self._proc.stdin.flush()
+        except BrokenPipeError:
+            raise TransportError("Server process has exited") from None
+        except OSError as e:
+            raise TransportError(f"Write error: {e}") from None
 
     def _recv(self) -> dict[str, Any] | None:
-        assert self._proc is not None
-        assert self._proc.stdout is not None
-        line = self._proc.stdout.readline()
+        if self._proc is None or self._proc.stdout is None:
+            raise TransportError("Not connected")
+        try:
+            line = self._proc.stdout.readline()
+        except OSError as e:
+            raise TransportError(f"Read error: {e}") from None
         if not line:
             return None
-        obj = json.loads(line)
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError as e:
+            eprint(red(f"Malformed JSON from server: {e}"))
+            eprint(red(f"  Raw line: {line[:200]!r}"))
+            return None
         if self.trace:
             eprint(yellow(f"<<< {json.dumps(obj)}"))
         return obj  # type: ignore[no-any-return]
@@ -89,8 +116,11 @@ class StdioTransport:
             return
         proc = self._proc
         self._proc = None
-        assert proc.stdin is not None
-        proc.stdin.close()
+        if proc.stdin:
+            try:
+                proc.stdin.close()
+            except OSError:
+                pass
         try:
             proc.wait(timeout=3)
         except subprocess.TimeoutExpired:
@@ -133,17 +163,25 @@ class HttpTransport:
         return headers
 
     def _post(self, obj: dict[str, Any]) -> dict[str, Any] | None:
+        import urllib3.exceptions
+
         body = json.dumps(obj, separators=(",", ":")).encode()
         if self.trace:
             eprint(cyan(f">>> {json.dumps(obj)}"))
 
-        resp = self._pool.request(
-            "POST",
-            self._url,
-            body=body,
-            headers=self._headers(),
-            preload_content=False,
-        )
+        try:
+            resp = self._pool.request(
+                "POST",
+                self._url,
+                body=body,
+                headers=self._headers(),
+                preload_content=False,
+                timeout=HTTP_TIMEOUT,
+            )
+        except urllib3.exceptions.MaxRetryError as e:
+            raise TransportError(f"Connection failed: {e.reason}") from None
+        except urllib3.exceptions.HTTPError as e:
+            raise TransportError(f"HTTP error: {e}") from None
 
         # Track session ID from server
         new_session_id = resp.headers.get("Mcp-Session-Id")
@@ -152,23 +190,28 @@ class HttpTransport:
 
         content_type = resp.headers.get("Content-Type", "")
 
-        if "text/event-stream" in content_type:
-            result = self._parse_sse(resp)
-        elif "application/json" in content_type:
-            data = resp.read()
-            result = json.loads(data)
-        elif resp.status == 202:
-            # Accepted — no response body (for notifications)
-            resp.read()
-            return None
-        else:
-            data = resp.read()
-            raise ValueError(
-                f"Unexpected Content-Type {content_type!r} "
-                f"(status {resp.status}): {data[:200]}"
-            )
-
-        resp.release_conn()
+        try:
+            if "text/event-stream" in content_type:
+                result = self._parse_sse(resp)
+            elif "application/json" in content_type:
+                data = resp.read()
+                try:
+                    result = json.loads(data)
+                except json.JSONDecodeError as e:
+                    eprint(red(f"Malformed JSON from server: {e}"))
+                    eprint(red(f"  Raw body: {data[:200]!r}"))
+                    return None
+            elif resp.status == 202:
+                resp.read()
+                return None
+            else:
+                data = resp.read()
+                raise TransportError(
+                    f"Unexpected Content-Type {content_type!r} "
+                    f"(status {resp.status}): {data[:200]}"
+                )
+        finally:
+            resp.release_conn()
 
         if self.trace and result is not None:
             eprint(yellow(f"<<< {json.dumps(result)}"))
@@ -185,14 +228,12 @@ class HttpTransport:
             if line.startswith("data: "):
                 data_lines.append(line[6:])
             elif line == "" and data_lines:
-                # End of event — parse accumulated data
                 payload = "\n".join(data_lines)
                 data_lines.clear()
                 try:
                     last_message = json.loads(payload)
                 except json.JSONDecodeError:
                     pass
-            # Ignore event:, id:, retry:, and comment lines
 
         # Handle trailing data without final blank line
         if data_lines:

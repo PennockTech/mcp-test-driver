@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from mcp_test_driver.repl import SessionCache, _print_result
 
 
@@ -45,26 +47,19 @@ class TestSessionCache:
 class TestPrintResult:
     """Tests for _print_result output formatting."""
 
-    def test_json_text_is_pretty_printed(self, capsys: object) -> None:
+    def test_json_text_is_pretty_printed(self, capsys: pytest.CaptureFixture) -> None:  # type: ignore[type-arg]
         resp = {
             "result": {
-                "content": [
-                    {"text": json.dumps({"key": "value"}), "type": "text"}
-                ]
+                "content": [{"text": json.dumps({"key": "value"}), "type": "text"}]
             }
         }
         _print_result(resp)
-        import sys
-
-        captured = sys.modules["_pytest.capture"].CaptureFixture  # type: ignore[attr-defined]
-        # Just verify it doesn't raise
+        captured = capsys.readouterr()
+        assert '"key"' in captured.out
+        assert '"value"' in captured.out
 
     def test_plain_text_output(self, capsys: object) -> None:
-        resp = {
-            "result": {
-                "content": [{"text": "hello world", "type": "text"}]
-            }
-        }
+        resp = {"result": {"content": [{"text": "hello world", "type": "text"}]}}
         _print_result(resp)
 
     def test_error_result(self, capsys: object) -> None:
@@ -82,3 +77,33 @@ class TestPrintResult:
 
     def test_missing_result(self) -> None:
         _print_result({})  # should not raise
+
+    def test_jsonrpc_error_response(self, capsys: pytest.CaptureFixture) -> None:  # type: ignore[type-arg]
+        resp = {
+            "error": {"code": -32600, "message": "Invalid Request"},
+        }
+        _print_result(resp)
+        captured = capsys.readouterr()
+        assert "Server error" in captured.out
+        assert "-32600" in captured.out
+
+    def test_jsonrpc_error_with_data(self, capsys: pytest.CaptureFixture) -> None:  # type: ignore[type-arg]
+        resp = {
+            "error": {
+                "code": -32603,
+                "message": "Internal",
+                "data": "extra details",
+            },
+        }
+        _print_result(resp)
+        captured = capsys.readouterr()
+        assert "extra details" in captured.out
+
+    def test_non_dict_result(self) -> None:
+        _print_result({"result": "just a string"})  # should not raise
+
+    def test_non_list_content(self) -> None:
+        _print_result({"result": {"content": "not a list"}})  # should not raise
+
+    def test_content_item_not_dict(self) -> None:
+        _print_result({"result": {"content": ["string item"]}})  # should not raise
