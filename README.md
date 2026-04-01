@@ -1,7 +1,7 @@
 # mcp-test-driver
 
 Interactive REPL for testing any [MCP](https://modelcontextprotocol.io/)
-server, over stdio or HTTP.
+server, over stdio or HTTP.  No AI wiring, just debugging.
 
 Point it at a command (stdio) or a URL (HTTP) and get a prompt with
 tab-completion for tools, argument keys, and enum values.
@@ -31,60 +31,61 @@ mcp> unicode_lookup_char char=✓
 
 ## CLI Options
 
-| Option | Description |
-|---|---|
-| `-h`, `--help` | Show help message |
-| `--trace` | Enable protocol tracing (default) |
-| `--no-trace` | Disable protocol tracing at startup |
-| `--roots` | Advertise cwd as filesystem root to the server |
-| `--roots=<path>` | Advertise a specific path as filesystem root |
+| Option           | Description                                    |
+| ---------------- | ---------------------------------------------- |
+| `-h`, `--help`   | Show help message                              |
+| `--trace`        | Enable protocol tracing (default)              |
+| `--no-trace`     | Disable protocol tracing at startup            |
+| `--roots`        | Advertise cwd as filesystem root to the server |
+| `--roots=<path>` | Advertise a specific path as filesystem root   |
 
 ## Built-in Commands
 
 Built-in commands use the `/` prefix.  Tool names are stripped of leading
-`/` during sanitization, so a malicious server cannot shadow builtins.
+`/` during sanitization, for namespace separation.
 
 ### Tools
 
-| Command | Alias | Description |
-|---|---|---|
-| `/list` | `/l` | List available tools |
-| `/describe <tool>` | `/d` | Show full schema for a tool |
+| Command            | Alias | Description                 |
+| ------------------ | ----- | --------------------------- |
+| `/list`            | `/l`  | List available tools        |
+| `/describe <tool>` | `/d`  | Show full schema for a tool |
 
 ### Resources
 
-| Command | Alias | Description |
-|---|---|---|
-| `/resources` | `/lr` | List available resources |
-| `/templates` | `/lt` | List resource templates |
-| `/read <uri>` | `/r` | Read a resource by URI |
-| `/subscribe <uri>` | `/sub` | Subscribe to resource updates |
+| Command              | Alias    | Description                       |
+| -------------------- | -------- | --------------------------------- |
+| `/resources`         | `/lr`    | List available resources          |
+| `/templates`         | `/lt`    | List resource templates           |
+| `/read <uri>`        | `/r`     | Read a resource by URI            |
+| `/subscribe <uri>`   | `/sub`   | Subscribe to resource updates     |
 | `/unsubscribe <uri>` | `/unsub` | Unsubscribe from resource updates |
 
 ### Prompts
 
-| Command | Alias | Description |
-|---|---|---|
-| `/prompts` | `/lp` | List available prompts |
-| `/prompt <name> [args]` | `/p` | Get a prompt (with optional key=val arguments) |
+| Command                 | Alias | Description                                    |
+| ----------------------- | ----- | ---------------------------------------------- |
+| `/prompts`              | `/lp` | List available prompts                         |
+| `/prompt <name> [args]` | `/p`  | Get a prompt (with optional key=val arguments) |
 
 ### Session & Diagnostics
 
-| Command | Alias | Description |
-|---|---|---|
-| `/ping` | | Ping the server |
-| `/loglevel <level>` | `/ll` | Set server log level |
-| `/roots` | | Show roots status |
-| `/roots on [path]` | | Enable roots capability (takes effect on `/reconnect`) |
-| `/roots off` | | Disable roots capability |
-| `/reconnect` | `/rc` | Reconnect to the server |
-| `/cache-flush` | `/cf` | Clear cached tools/resources/prompts, re-fetch |
-| `/trace` | `/t` | Toggle JSON-RPC protocol tracing |
-| `/help` | `/h` | Show help (or `/help <tool>` for tool help) |
-| `/quit` | `/q` | Exit |
+| Command             | Alias | Description                                            |
+| ------------------- | ----- | ------------------------------------------------------ |
+| `/ping`             |       | Ping the server                                        |
+| `/loglevel <level>` | `/ll` | Set server log level                                   |
+| `/roots`            |       | Show roots status                                      |
+| `/roots on [path]`  |       | Enable roots capability (takes effect on `/reconnect`) |
+| `/roots off`        |       | Disable roots capability                               |
+| `/reconnect`        | `/rc` | Reconnect to the server                                |
+| `/cache-flush`      | `/cf` | Clear cached tools/resources/prompts, re-fetch         |
+| `/trace`            | `/t`  | Toggle JSON-RPC protocol tracing                       |
+| `/help`             | `/h`  | Show help (or `/help <tool>` for tool help)            |
+| `/quit`             | `/q`  | Exit                                                   |
 
 Press **Tab** to complete commands, tool names, argument keys (`key=`), and
-enum values.  Press **F1** or **Esc-H** for context-sensitive help.
+enum values.  Press **F1** or **Esc-H** for context-sensitive help, at any
+point in a command.
 
 ## Client Capabilities
 
@@ -108,29 +109,29 @@ Security constraints:
 ### Sampling
 
 The MCP `sampling` capability (server asks the client to generate LLM
-completions) is **not implemented**.  This is out of scope for a test driver.
+completions) is **not implemented**.  This is currently considered out of scope.
 
 ## Protocol Coverage
 
 mcp-test-driver implements the following MCP protocol methods:
 
-| Method | Direction | Notes |
-|---|---|---|
-| `initialize` | client → server | Advertises capabilities from handler registry |
-| `notifications/initialized` | client → server | |
-| `tools/list` | client → server | Paginated |
-| `tools/call` | client → server | |
-| `resources/list` | client → server | Paginated; fetched if server advertises resources |
-| `resources/templates/list` | client → server | Paginated |
-| `resources/read` | client → server | |
-| `resources/subscribe` | client → server | |
-| `resources/unsubscribe` | client → server | |
-| `prompts/list` | client → server | Paginated; fetched if server advertises prompts |
-| `prompts/get` | client → server | |
-| `ping` | both directions | Client handles server-initiated pings |
-| `logging/setLevel` | client → server | |
-| `completion/complete` | client → server | |
-| `roots/list` | server → client | When `--roots` is enabled |
+| Method                      | Direction       | Notes                                             |
+| --------------------------- | --------------- | ------------------------------------------------- |
+| `initialize`                | client → server | Advertises capabilities from handler registry     |
+| `notifications/initialized` | client → server |                                                   |
+| `tools/list`                | client → server | Paginated                                         |
+| `tools/call`                | client → server |                                                   |
+| `resources/list`            | client → server | Paginated; fetched if server advertises resources |
+| `resources/templates/list`  | client → server | Paginated                                         |
+| `resources/read`            | client → server |                                                   |
+| `resources/subscribe`       | client → server |                                                   |
+| `resources/unsubscribe`     | client → server |                                                   |
+| `prompts/list`              | client → server | Paginated; fetched if server advertises prompts   |
+| `prompts/get`               | client → server |                                                   |
+| `ping`                      | both directions | Client handles server-initiated pings             |
+| `logging/setLevel`          | client → server |                                                   |
+| `completion/complete`       | client → server |                                                   |
+| `roots/list`                | server → client | When `--roots` is enabled                         |
 
 ## Known Limitations
 
