@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 from .color import bold, dim, red
 
@@ -33,32 +34,27 @@ class CompletionState:
 
     tool_names: set[str] = field(default_factory=set)
     tool_descriptions: dict[str, str] = field(default_factory=dict)
-    tool_schemas: dict[str, dict[str, object]] = field(default_factory=dict)
+    tool_schemas: dict[str, dict[str, Any]] = field(default_factory=dict)
     tool_args: dict[str, list[str]] = field(default_factory=dict)
     arg_enums: dict[str, list[str]] = field(default_factory=dict)
     arg_descriptions: dict[str, str] = field(default_factory=dict)
     all_first_words: set[str] = field(default_factory=set)
 
     @classmethod
-    def from_tools(cls, tools: list[dict[str, object]]) -> CompletionState:
+    def from_tools(cls, tools: list[dict[str, Any]]) -> CompletionState:
         state = cls()
         for t in tools:
             name = str(t["name"])
             state.tool_names.add(name)
             state.tool_descriptions[name] = str(t.get("description", ""))
             schema = t.get("inputSchema", {})
-            assert isinstance(schema, dict)
             state.tool_schemas[name] = schema
             props = schema.get("properties", {})
-            assert isinstance(props, dict)
             keys = sorted(props.keys())
             state.tool_args[name] = [k + "=" for k in keys]
             for k, v in props.items():
-                assert isinstance(v, dict)
                 if "enum" in v:
-                    enum_vals = v["enum"]
-                    assert isinstance(enum_vals, list)
-                    state.arg_enums[f"{name}:{k}"] = [str(e) for e in enum_vals]
+                    state.arg_enums[f"{name}:{k}"] = [str(e) for e in v["enum"]]
                 desc_parts: list[str] = []
                 if "type" in v:
                     desc_parts.append(f"type: {v['type']}")
@@ -183,12 +179,9 @@ def _show_tool_help(state: CompletionState, name: str) -> None:
     schema = state.tool_schemas.get(name, {})
     props = schema.get("properties", {})
     required = schema.get("required", [])
-    assert isinstance(props, dict)
-    assert isinstance(required, list)
     if props:
         print("  Arguments:")
         for k, v in sorted(props.items()):
-            assert isinstance(v, dict)
             req = " (required)" if k in required else ""
             typ = v.get("type", "")
             d = v.get("description", "")

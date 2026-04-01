@@ -3,10 +3,11 @@
 """ANSI color helpers for terminal output."""
 
 import sys
+from typing import IO
 
 
-def _colour(code: str, s: str, stream: object) -> str:
-    if hasattr(stream, "isatty") and stream.isatty():
+def _colour(code: str, s: str, stream: IO[str]) -> str:
+    if stream.isatty():
         return f"\033[{code}m{s}\033[0m"
     return s
 
@@ -47,5 +48,5 @@ def green(s: str) -> str:
     return _out("32", s)
 
 
-def eprint(*args: object, **kwargs: object) -> None:
-    print(*args, **kwargs, file=sys.stderr)  # type: ignore[arg-type]
+def eprint(*args: object) -> None:
+    print(*args, file=sys.stderr)

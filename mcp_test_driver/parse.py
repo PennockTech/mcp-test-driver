@@ -4,9 +4,10 @@
 
 import json
 import shlex
+from typing import Any
 
 
-def parse_args(text: str) -> dict[str, object]:
+def parse_args(text: str) -> dict[str, Any]:
     """Accept a JSON object literal or space-separated key=value pairs.
 
     Scalars are coerced: true/false → bool, numeric strings → int.
@@ -17,7 +18,7 @@ def parse_args(text: str) -> dict[str, object]:
     if text.startswith("{"):
         return json.loads(text)  # type: ignore[no-any-return]
 
-    result: dict[str, object] = {}
+    result: dict[str, Any] = {}
     for token in shlex.split(text):
         if "=" not in token:
             continue

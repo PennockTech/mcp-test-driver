@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from .color import bold, dim, red
 from .completion import (
@@ -25,15 +25,15 @@ if TYPE_CHECKING:
 class SessionCache:
     """Cached data from the MCP server, discarded on reconnect."""
 
-    tools: list[dict[str, object]] = field(default_factory=list)
-    server_info: dict[str, object] = field(default_factory=dict)
+    tools: list[dict[str, Any]] = field(default_factory=list)
+    server_info: dict[str, Any] = field(default_factory=dict)
     completion: CompletionState = field(default_factory=CompletionState)
 
     @classmethod
     def build(
         cls,
-        tools: list[dict[str, object]],
-        server_info: dict[str, object],
+        tools: list[dict[str, Any]],
+        server_info: dict[str, Any],
     ) -> SessionCache:
         return cls(
             tools=tools,
@@ -42,16 +42,12 @@ class SessionCache:
         )
 
 
-def _print_result(resp: dict[str, object]) -> None:
+def _print_result(resp: dict[str, Any]) -> None:
     result = resp.get("result", {})
-    assert isinstance(result, dict)
     is_error = result.get("isError", False)
     content = result.get("content", [])
-    assert isinstance(content, list)
     for item in content:
-        assert isinstance(item, dict)
         text = item.get("text", "")
-        assert isinstance(text, str)
         if is_error:
             print(red(f"Error: {text}"))
         else:

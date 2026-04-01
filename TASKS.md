@@ -1,9 +1,7 @@
-# Stage 2 Tasks
+# Stage 3 Tasks
 
-- [x] Implement `HttpTransport` in `transport.py` with urllib3
-- [x] Implement SSE parser for `text/event-stream` responses
-- [x] Track `Mcp-Session-Id` header across requests
-- [x] Wire up `cli.py:_run_http()` to use HttpTransport
-- [x] Test with `https://unicode.mcp.pennock.tech/mcp`
-- [x] Fix readline bind errors when stdin is piped
-- [x] Run `ruff check` and `ruff format` clean
+- [x] Run `ty check` and fix type issues (switched `dict[str, object]` → `dict[str, Any]`)
+- [x] Delete old `mcp_test_driver.py` from repo root
+- [x] `ruff check` and `ruff format` clean
+- [x] `ty check` passes clean
+- [x] Verify stdio and HTTP transports still work

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 import subprocess
-from typing import Protocol
+from typing import Any, Protocol
 
 from .color import bold_err, cyan, eprint, yellow
 
@@ -21,11 +21,11 @@ class Transport(Protocol):
 
     trace: bool
 
-    def request(self, obj: dict[str, object]) -> dict[str, object] | None:
+    def request(self, obj: dict[str, Any]) -> dict[str, Any] | None:
         """Send a JSON-RPC request and return the response."""
         ...
 
-    def notify(self, obj: dict[str, object]) -> None:
+    def notify(self, obj: dict[str, Any]) -> None:
         """Send a JSON-RPC notification (no response expected)."""
         ...
 
@@ -38,7 +38,7 @@ class Transport(Protocol):
         ...
 
 
-def _frame(obj: dict[str, object]) -> bytes:
+def _frame(obj: dict[str, Any]) -> bytes:
     return json.dumps(obj, separators=(",", ":")).encode() + b"\n"
 
 
@@ -58,7 +58,7 @@ class StdioTransport:
             stdout=subprocess.PIPE,
         )
 
-    def _send(self, obj: dict[str, object]) -> None:
+    def _send(self, obj: dict[str, Any]) -> None:
         assert self._proc is not None
         assert self._proc.stdin is not None
         if self.trace:
@@ -66,7 +66,7 @@ class StdioTransport:
         self._proc.stdin.write(_frame(obj))
         self._proc.stdin.flush()
 
-    def _recv(self) -> dict[str, object] | None:
+    def _recv(self) -> dict[str, Any] | None:
         assert self._proc is not None
         assert self._proc.stdout is not None
         line = self._proc.stdout.readline()
@@ -77,11 +77,11 @@ class StdioTransport:
             eprint(yellow(f"<<< {json.dumps(obj)}"))
         return obj  # type: ignore[no-any-return]
 
-    def request(self, obj: dict[str, object]) -> dict[str, object] | None:
+    def request(self, obj: dict[str, Any]) -> dict[str, Any] | None:
         self._send(obj)
         return self._recv()
 
-    def notify(self, obj: dict[str, object]) -> None:
+    def notify(self, obj: dict[str, Any]) -> None:
         self._send(obj)
 
     def close(self) -> None:
@@ -132,7 +132,7 @@ class HttpTransport:
             headers["Mcp-Session-Id"] = self._session_id
         return headers
 
-    def _post(self, obj: dict[str, object]) -> dict[str, object] | None:
+    def _post(self, obj: dict[str, Any]) -> dict[str, Any] | None:
         body = json.dumps(obj, separators=(",", ":")).encode()
         if self.trace:
             eprint(cyan(f">>> {json.dumps(obj)}"))
@@ -174,12 +174,12 @@ class HttpTransport:
             eprint(yellow(f"<<< {json.dumps(result)}"))
         return result
 
-    def _parse_sse(self, resp: object) -> dict[str, object] | None:
+    def _parse_sse(self, resp: Any) -> dict[str, Any] | None:
         """Parse a Server-Sent Events stream, returning the last JSON-RPC message."""
         data_lines: list[str] = []
-        last_message: dict[str, object] | None = None
+        last_message: dict[str, Any] | None = None
 
-        for raw_line in resp:  # type: ignore[union-attr]
+        for raw_line in resp:
             line = raw_line.decode("utf-8", errors="replace").rstrip("\r\n")
 
             if line.startswith("data: "):
@@ -204,10 +204,10 @@ class HttpTransport:
 
         return last_message
 
-    def request(self, obj: dict[str, object]) -> dict[str, object] | None:
+    def request(self, obj: dict[str, Any]) -> dict[str, Any] | None:
         return self._post(obj)
 
-    def notify(self, obj: dict[str, object]) -> None:
+    def notify(self, obj: dict[str, Any]) -> None:
         self._post(obj)
 
     def close(self) -> None:
