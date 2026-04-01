@@ -230,6 +230,39 @@ def _show_tool_help(state: CompletionState, name: str) -> None:
     print()
 
 
+def readline_info() -> tuple[str, str]:
+    """Return (name, version) for the active readline library.
+
+    Name is 'libedit' or 'readline'.  Version is a 'major.minor' string, or
+    'unknown' if no version information is available.
+    """
+    try:
+        import readline
+    except ImportError:
+        return ("readline", "unknown")
+
+    backend = getattr(readline, "backend", None)
+    doc = getattr(readline, "__doc__", "") or ""
+    lib_ver = getattr(readline, "_READLINE_LIBRARY_VERSION", "") or ""
+    ver_int = getattr(readline, "_READLINE_VERSION", None)
+
+    is_libedit = backend == "editline" or "libedit" in doc or "EditLine" in lib_ver
+    name = "libedit" if is_libedit else "readline"
+
+    # _READLINE_LIBRARY_VERSION is e.g. "8.2" for GNU readline but
+    # "EditLine wrapper" for libedit, so fall back to decoding the integer.
+    import re
+
+    if re.match(r"^\d+\.\d+", lib_ver):
+        version = lib_ver
+    elif ver_int is not None:
+        version = f"{ver_int >> 8}.{ver_int & 0xFF}"
+    else:
+        version = "unknown"
+
+    return (name, version)
+
+
 def setup_readline(state: CompletionState) -> bool:
     """Configure readline with completion and help keybindings.
 
@@ -256,9 +289,14 @@ def setup_readline(state: CompletionState) -> bool:
     if sys.stdin.isatty():
         macro = r'"\C-a\C-k/help \C-y\C-m"'
         doc = getattr(readline, "__doc__", "") or ""
-        if "libedit" in doc:
-            readline.parse_and_bind("bind \\eH " + macro)
-            readline.parse_and_bind("bind \\eOP " + macro)
+        backend = getattr(readline, "backend", None)
+        is_libedit = backend == "editline" or "libedit" in doc
+        if is_libedit:
+            # libedit requires 'bind -s' for string macros; 'bind key string'
+            # (without -s) treats the string as a command name and emits
+            # 'bind: Invalid command' errors on startup.
+            readline.parse_and_bind("bind -s \\eH " + macro)
+            readline.parse_and_bind("bind -s \\eOP " + macro)
         else:
             readline.parse_and_bind(r'"\eH": ' + macro)
             readline.parse_and_bind(r'"\eOP": ' + macro)

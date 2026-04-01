@@ -14,6 +14,7 @@ from .completion import (
     BUILTIN_COMMANDS,
     BUILTIN_PREFIX,
     CompletionState,
+    readline_info,
     setup_readline,
 )
 from .parse import parse_args
@@ -134,6 +135,8 @@ class Repl:
         server_name = sanitize(str(self.cache.server_info.get("name", "MCP server")))
         print()
         print(bold(f"mcp-test-driver — connected to {server_name}"))
+        rl_name, rl_version = readline_info()
+        print(dim(f"REPL using {rl_name} version {rl_version}."))
         print(dim('Type "/list" to see tools, "/help" for usage, Ctrl-D to exit.'))
         print(dim("Tab-completion is available.  F1 or Esc-H for context help."))
         print()
