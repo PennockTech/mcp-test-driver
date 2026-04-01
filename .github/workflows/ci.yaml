@@ -1,0 +1,53 @@
+# This workflow MUST be audited with zizmor.
+# This workflow SHOULD be using pinned action refs.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:  # let someone trigger the CI on their branch without a PR
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+
+  test:
+    name: Test
+
+    runs-on: ubuntu-slim
+
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          version: "0.10.12"
+          enable-cache: true  # not a release workflow, caching is fine
+
+      - name: Install the project
+        run: uv sync --locked --all-extras --dev
+
+      # Run the tests before the lint and type-check, so that we at least can
+      # see useful results before going and fixing nits.
+
+      - name: Test across Python versions
+        run: uv run tox
+
+      # 2026-04-01: FIXME: these should be fixed before we go to v0.2.0
+#     - name: Lint
+#       run: uv run ruff check .
+#
+#     - name: Type-check
+#       run: uv run ty check .
