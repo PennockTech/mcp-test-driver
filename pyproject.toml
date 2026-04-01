@@ -1,0 +1,51 @@
+[project]
+name = "mcp-test-driver"
+version = "0.1.0"
+description = "Interactive REPL for testing any MCP server over stdio or HTTP"
+readme = "README.md"
+license = "ISC"
+authors = [
+  { name="Phil Pennock", email="python-pkgs@pennock-tech.com" },
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Operating System :: OS Independent",
+  "Topic :: Software Development :: Testing",
+]
+keywords = [
+  "mcp", "model-context-protocol", "testing", "repl",
+]
+
+requires-python = ">=3.12"
+
+dependencies = [
+  "urllib3>=2.0",
+]
+
+[project.urls]
+repository = "https://github.com/PennockTech/mcp-test-driver"
+issues = "https://github.com/PennockTech/mcp-test-driver/issues"
+
+[project.scripts]
+mcp-test-driver = "mcp_test_driver.cli:main"
+
+[build-system]
+requires=["uv_build>=0.10.0,<0.12"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+  "ruff",
+  "ty",
+]
+
+[tool.uv.build-backend]
+module-root = ""
+
+[tool.ruff]
+target-version = "py312"
+
+[tool.uv]
+exclude-newer = "3 days"

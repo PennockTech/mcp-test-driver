@@ -1,0 +1,33 @@
+version: '3'
+
+tasks:
+  default:
+    desc: Show available tasks
+    cmds:
+      - task --list
+
+  lint:
+    desc: Run ruff linter
+    cmds:
+      - uv run ruff check mcp_test_driver/
+
+  fmt:
+    desc: Run ruff formatter
+    cmds:
+      - uv run ruff format mcp_test_driver/
+
+  typecheck:
+    desc: Run ty type checker
+    cmds:
+      - uv run ty check
+
+  check:
+    desc: Run all checks (lint + typecheck)
+    cmds:
+      - task: lint
+      - task: typecheck
+
+  run:
+    desc: Run mcp-test-driver (pass args after --)
+    cmds:
+      - uv run mcp-test-driver {{.CLI_ARGS}}
