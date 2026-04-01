@@ -17,6 +17,7 @@ from .completion import (
     setup_readline,
 )
 from .parse import parse_args
+from .protocol import McpError
 from .transport import TransportError, sanitize
 
 if TYPE_CHECKING:
@@ -28,19 +29,53 @@ class SessionCache:
     """Cached data from the MCP server, discarded on reconnect."""
 
     tools: list[dict[str, Any]] = field(default_factory=list)
+    resources: list[dict[str, Any]] = field(default_factory=list)
+    resource_templates: list[dict[str, Any]] = field(default_factory=list)
+    prompts: list[dict[str, Any]] = field(default_factory=list)
     server_info: dict[str, Any] = field(default_factory=dict)
     completion: CompletionState = field(default_factory=CompletionState)
 
     @classmethod
-    def build(
-        cls,
-        tools: list[dict[str, Any]],
-        server_info: dict[str, Any],
-    ) -> SessionCache:
+    def build(cls, session: McpSession) -> SessionCache:
+        tools = session.list_tools()
+
+        # Fetch resources, templates, and prompts if the server supports them.
+        # Servers that don't support these will return errors — catch and skip.
+        resources: list[dict[str, Any]] = []
+        resource_templates: list[dict[str, Any]] = []
+        prompts: list[dict[str, Any]] = []
+
+        caps = session.server_capabilities
+        if "resources" in caps:
+            try:
+                resources = session.list_resources()
+            except (McpError, TransportError, ConnectionError):
+                pass
+            try:
+                resource_templates = session.list_resource_templates()
+            except (McpError, TransportError, ConnectionError):
+                pass
+        if "prompts" in caps:
+            try:
+                prompts = session.list_prompts()
+            except (McpError, TransportError, ConnectionError):
+                pass
+
+        state = CompletionState.from_tools(tools)
+        state.resource_uris = [
+            sanitize(str(r.get("uri", ""))) for r in resources if r.get("uri")
+        ]
+        state.prompt_names = [
+            sanitize(str(p.get("name", ""))) for p in prompts if p.get("name")
+        ]
+
         return cls(
             tools=tools,
-            server_info=server_info,
-            completion=CompletionState.from_tools(tools),
+            resources=resources,
+            resource_templates=resource_templates,
+            prompts=prompts,
+            server_info=session.server_info,
+            completion=state,
         )
 
 
@@ -66,6 +101,9 @@ def _print_result(resp: dict[str, Any]) -> None:
     is_error = result.get("isError", False)
     content = result.get("content")
     if not isinstance(content, list):
+        # For responses without content (e.g., prompt results, resource reads),
+        # pretty-print the entire result.
+        print(json.dumps(result, indent=2, ensure_ascii=False))
         return
 
     for item in content:
@@ -89,10 +127,7 @@ class Repl:
 
     def __init__(self, session: McpSession) -> None:
         self.session = session
-        self.cache = SessionCache.build(
-            session.list_tools(),
-            session.server_info,
-        )
+        self.cache = SessionCache.build(session)
         self._trace_enabled = session.transport.trace
 
     def run(self) -> None:
@@ -132,6 +167,10 @@ class Repl:
                 print(red(f"Transport error: {e}"))
             except ConnectionError as e:
                 print(red(f"Connection lost: {e}"))
+            except McpError as e:
+                print(red(f"MCP error [{e.code}]: {e.message}"))
+                if e.data:
+                    print(red(f"  {e.data}"))
             except Exception as e:
                 print(red(f"Unexpected error: {type(e).__name__}: {e}"))
 
@@ -145,6 +184,24 @@ class Repl:
             self._cmd_list()
         elif cmd == "/describe":
             self._cmd_describe(rest)
+        elif cmd == "/resources":
+            self._cmd_resources()
+        elif cmd == "/templates":
+            self._cmd_templates()
+        elif cmd == "/read":
+            self._cmd_read(rest)
+        elif cmd == "/prompts":
+            self._cmd_prompts()
+        elif cmd == "/prompt":
+            self._cmd_prompt(rest)
+        elif cmd == "/ping":
+            self._cmd_ping()
+        elif cmd == "/loglevel":
+            self._cmd_loglevel(rest)
+        elif cmd == "/subscribe":
+            self._cmd_subscribe(rest)
+        elif cmd == "/unsubscribe":
+            self._cmd_unsubscribe(rest)
         elif cmd == "/reconnect":
             self._cmd_reconnect()
         elif cmd == "/cache-flush":
@@ -178,17 +235,132 @@ class Repl:
 
         _show_tool_help(self.cache.completion, name)
 
+    def _cmd_resources(self) -> None:
+        if not self.cache.resources:
+            print(dim("No resources available."))
+            return
+        for r in self.cache.resources:
+            uri = sanitize(str(r.get("uri", "?")))
+            name = sanitize(str(r.get("name", "")))
+            mime = sanitize(str(r.get("mimeType", "")))
+            desc = sanitize(str(r.get("description", "")))
+            line = f"  {bold(uri)}"
+            if name:
+                line += f"  {name}"
+            if mime:
+                line += f"  {dim('[' + mime + ']')}"
+            print(line)
+            if desc:
+                print(f"    {dim(desc)}")
+
+    def _cmd_templates(self) -> None:
+        if not self.cache.resource_templates:
+            print(dim("No resource templates available."))
+            return
+        for t in self.cache.resource_templates:
+            uri = sanitize(str(t.get("uriTemplate", "?")))
+            name = sanitize(str(t.get("name", "")))
+            mime = sanitize(str(t.get("mimeType", "")))
+            desc = sanitize(str(t.get("description", "")))
+            line = f"  {bold(uri)}"
+            if name:
+                line += f"  {name}"
+            if mime:
+                line += f"  {dim('[' + mime + ']')}"
+            print(line)
+            if desc:
+                print(f"    {dim(desc)}")
+
+    def _cmd_read(self, rest: str) -> None:
+        uri = rest.strip()
+        if not uri:
+            print(red("Usage: /read <uri>"))
+            return
+        resp = self.session.read_resource(uri)
+        if resp is None:
+            print(red("Server closed connection."))
+            return
+        _print_result(resp)
+
+    def _cmd_prompts(self) -> None:
+        if not self.cache.prompts:
+            print(dim("No prompts available."))
+            return
+        for p in self.cache.prompts:
+            name = sanitize(str(p.get("name", "?")))
+            desc = sanitize(str(p.get("description", "")))
+            print(f"  {bold(name)}: {dim(desc)}")
+            args = p.get("arguments", [])
+            if isinstance(args, list):
+                for arg in args:
+                    if not isinstance(arg, dict):
+                        continue
+                    aname = sanitize(str(arg.get("name", "?")))
+                    adesc = sanitize(str(arg.get("description", "")))
+                    req = " (required)" if arg.get("required") else ""
+                    print(f"    {bold(aname + '=')}{req}  {dim(adesc)}")
+
+    def _cmd_prompt(self, rest: str) -> None:
+        parts = rest.strip().split(None, 1)
+        if not parts:
+            print(red("Usage: /prompt <name> [key=val ...]"))
+            return
+        name = parts[0]
+        arg_text = parts[1] if len(parts) > 1 else ""
+        try:
+            arguments = parse_args(arg_text) if arg_text else None
+        except (json.JSONDecodeError, ValueError) as exc:
+            print(red(f"Could not parse arguments: {exc}"))
+            return
+        resp = self.session.get_prompt(name, arguments)
+        if resp is None:
+            print(red("Server closed connection."))
+            return
+        _print_result(resp)
+
+    def _cmd_ping(self) -> None:
+        self.session.ping()
+        print(dim("Pong."))
+
+    def _cmd_loglevel(self, rest: str) -> None:
+        level = rest.strip()
+        if not level:
+            print(red("Usage: /loglevel <level>"))
+            print(
+                dim(
+                    "  Levels: debug, info, notice, warning, error, critical, alert, emergency"
+                )
+            )
+            return
+        self.session.set_log_level(level)
+        print(dim(f"Log level set to {level}."))
+
+    def _cmd_subscribe(self, rest: str) -> None:
+        uri = rest.strip()
+        if not uri:
+            print(red("Usage: /subscribe <uri>"))
+            return
+        self.session.subscribe_resource(uri)
+        print(dim(f"Subscribed to {uri}."))
+
+    def _cmd_unsubscribe(self, rest: str) -> None:
+        uri = rest.strip()
+        if not uri:
+            print(red("Usage: /unsubscribe <uri>"))
+            return
+        self.session.unsubscribe_resource(uri)
+        print(dim(f"Unsubscribed from {uri}."))
+
     def _cmd_reconnect(self) -> None:
         tools = self.session.reconnect()
-        self.cache = SessionCache.build(tools, self.session.server_info)
+        self.cache = SessionCache.build(self.session)
         setup_readline(self.cache.completion)
         print(dim(f"Reconnected. {len(tools)} tools available."))
 
     def _cmd_cache_flush(self) -> None:
-        tools = self.session.list_tools()
-        self.cache = SessionCache.build(tools, self.session.server_info)
+        self.cache = SessionCache.build(self.session)
         setup_readline(self.cache.completion)
-        print(dim(f"Cache flushed. {len(tools)} tools available."))
+        print(dim(f"Cache flushed. {len(self.cache.tools)} tools available."))
 
     def _cmd_trace(self) -> None:
         self._trace_enabled = not self._trace_enabled
@@ -242,7 +414,8 @@ def _show_general_help() -> None:
     print()
     print("  Built-in commands (/-prefixed):")
     for canonical, alias, desc in BUILTIN_COMMANDS:
-        print(f"    {bold(canonical):24s} {alias:6s}  {dim(desc)}")
+        alias_col = alias if alias else "    "
+        print(f"    {bold(canonical):24s} {alias_col:6s}  {dim(desc)}")
     print()
     print("  Tool invocation:")
     print(f"    {bold('<tool>'):<24s}         call with no arguments")

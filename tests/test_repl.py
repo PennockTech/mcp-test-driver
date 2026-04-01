@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -26,22 +27,69 @@ SAMPLE_TOOLS: list[dict] = [
 ]
 
 
+def _mock_session(
+    tools: list[dict] | None = None,
+    server_info: dict | None = None,
+    capabilities: dict | None = None,
+) -> MagicMock:
+    """Create a mock McpSession for SessionCache.build."""
+    session = MagicMock()
+    session.list_tools.return_value = tools or []
+    session.server_info = server_info or {}
+    session.server_capabilities = capabilities or {}
+    session.list_resources.return_value = []
+    session.list_resource_templates.return_value = []
+    session.list_prompts.return_value = []
+    return session
+
+
 class TestSessionCache:
     """Tests for SessionCache."""
 
     def test_build_populates_tools(self) -> None:
-        cache = SessionCache.build(SAMPLE_TOOLS, {"name": "test"})
+        session = _mock_session(tools=SAMPLE_TOOLS, server_info={"name": "test"})
+        cache = SessionCache.build(session)
         assert cache.tools == SAMPLE_TOOLS
         assert cache.server_info == {"name": "test"}
 
     def test_build_creates_completion_state(self) -> None:
-        cache = SessionCache.build(SAMPLE_TOOLS, {})
+        session = _mock_session(tools=SAMPLE_TOOLS)
+        cache = SessionCache.build(session)
         assert "test_tool" in cache.completion.tool_names
 
     def test_build_empty_tools(self) -> None:
-        cache = SessionCache.build([], {})
+        session = _mock_session()
+        cache = SessionCache.build(session)
         assert cache.tools == []
         assert cache.completion.tool_names == set()
+
+    def test_build_fetches_resources_when_capable(self) -> None:
+        resources = [{"uri": "file:///test.txt", "name": "test"}]
+        session = _mock_session(capabilities={"resources": {}})
+        session.list_resources.return_value = resources
+        cache = SessionCache.build(session)
+        assert cache.resources == resources
+        assert "file:///test.txt" in cache.completion.resource_uris
+
+    def test_build_fetches_prompts_when_capable(self) -> None:
+        prompts = [{"name": "greet", "description": "Greeting prompt"}]
+        session = _mock_session(capabilities={"prompts": {}})
+        session.list_prompts.return_value = prompts
+        cache = SessionCache.build(session)
+        assert cache.prompts == prompts
+        assert "greet" in cache.completion.prompt_names
+
+    def test_build_skips_resources_without_capability(self) -> None:
+        session = _mock_session()  # no resources capability
+        cache = SessionCache.build(session)
+        assert cache.resources == []
+        session.list_resources.assert_not_called()
+
+    def test_build_skips_prompts_without_capability(self) -> None:
+        session = _mock_session()  # no prompts capability
+        cache = SessionCache.build(session)
+        assert cache.prompts == []
+        session.list_prompts.assert_not_called()
 
 
 class TestPrintResult:
@@ -102,8 +150,11 @@ class TestPrintResult:
     def test_non_dict_result(self) -> None:
         _print_result({"result": "just a string"})  # should not raise
 
-    def test_non_list_content(self) -> None:
-        _print_result({"result": {"content": "not a list"}})  # should not raise
+    def test_non_list_content(self, capsys: pytest.CaptureFixture) -> None:  # type: ignore[type-arg]
+        # Result without content list should pretty-print the result dict
+        _print_result({"result": {"data": "something"}})
+        captured = capsys.readouterr()
+        assert "something" in captured.out
 
     def test_content_item_not_dict(self) -> None:
         _print_result({"result": {"content": ["string item"]}})  # should not raise

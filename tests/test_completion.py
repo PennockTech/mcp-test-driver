@@ -50,11 +50,13 @@ class TestBuiltinCommands:
     def test_all_commands_have_correct_prefix(self) -> None:
         for canonical, alias, _desc in BUILTIN_COMMANDS:
             assert canonical.startswith(BUILTIN_PREFIX)
-            assert alias.startswith(BUILTIN_PREFIX)
+            if alias:
+                assert alias.startswith(BUILTIN_PREFIX)
 
     def test_aliases_resolve_to_canonical(self) -> None:
         for canonical, alias, _desc in BUILTIN_COMMANDS:
-            assert BUILTIN_ALIASES[alias] == canonical
+            if alias:
+                assert BUILTIN_ALIASES[alias] == canonical
 
     def test_canonical_names_in_set(self) -> None:
         for canonical, _alias, _desc in BUILTIN_COMMANDS:

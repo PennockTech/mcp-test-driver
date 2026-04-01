@@ -19,6 +19,15 @@ BUILTIN_COMMANDS: list[tuple[str, str, str]] = [
     ("/help", "/h", "Show help (or /help <tool> for tool help)"),
     ("/list", "/l", "List available tools"),
     ("/describe", "/d", "Show full schema for a tool"),
+    ("/resources", "/lr", "List available resources"),
+    ("/templates", "/lt", "List resource templates"),
+    ("/read", "/r", "Read a resource by URI"),
+    ("/prompts", "/lp", "List available prompts"),
+    ("/prompt", "/p", "Get a prompt (with optional arguments)"),
+    ("/ping", "", "Ping the server"),
+    ("/loglevel", "/ll", "Set server log level"),
+    ("/subscribe", "/sub", "Subscribe to resource updates"),
+    ("/unsubscribe", "/unsub", "Unsubscribe from resource updates"),
     ("/reconnect", "/rc", "Reconnect to the server"),
     ("/cache-flush", "/cf", "Clear cached tools, re-fetch from server"),
     ("/trace", "/t", "Toggle JSON-RPC protocol tracing"),
@@ -29,7 +38,8 @@ BUILTIN_NAMES: set[str] = set()
 BUILTIN_ALIASES: dict[str, str] = {}  # alias → canonical
 for _canonical, _alias, _desc in BUILTIN_COMMANDS:
     BUILTIN_NAMES.add(_canonical)
-    BUILTIN_ALIASES[_alias] = _canonical
+    if _alias:
+        BUILTIN_ALIASES[_alias] = _canonical
 
 
 @dataclass
@@ -43,6 +53,9 @@ class CompletionState:
     arg_enums: dict[str, list[str]] = field(default_factory=dict)
     arg_descriptions: dict[str, str] = field(default_factory=dict)
     all_first_words: set[str] = field(default_factory=set)
+    # Resources and prompts for tab-completion of /read, /prompt, etc.
+    resource_uris: list[str] = field(default_factory=list)
+    prompt_names: list[str] = field(default_factory=list)
 
     @classmethod
     def from_tools(cls, tools: list[dict[str, Any]]) -> CompletionState:
@@ -101,9 +114,13 @@ def make_completer(state: CompletionState):  # noqa: ANN201
             # Resolve aliases
             if first_word in BUILTIN_ALIASES:
                 first_word = BUILTIN_ALIASES[first_word]
-            # /describe and /help take a tool name as argument
+            # /describe, /help take a tool name as argument
             if first_word in ("/describe", "/help"):
                 matches = sorted(n for n in state.tool_names if n.startswith(text))
+            elif first_word == "/prompt":
+                matches = sorted(n for n in state.prompt_names if n.startswith(text))
+            elif first_word in ("/read", "/subscribe", "/unsubscribe"):
+                matches = sorted(u for u in state.resource_uris if u.startswith(text))
             elif first_word in state.tool_names:
                 if "=" in text:
                     key, _, partial = text.partition("=")

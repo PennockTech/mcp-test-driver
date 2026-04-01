@@ -36,35 +36,40 @@ class FakeTransport:
         self._reconnect_count += 1
 
 
+def _server_info_response(
+    name: str = "test-server",
+    version: str = "1.0",
+    *,
+    capabilities: dict | None = None,
+) -> dict:
+    return {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+            "protocolVersion": "2024-11-05",
+            "capabilities": capabilities or {},
+            "serverInfo": {"name": name, "version": version},
+        },
+    }
+
+
+def _tools_response(tools: list[dict] | None = None, *, req_id: int = 2) -> dict:
+    if tools is None:
+        tools = [
+            {
+                "name": "test_tool",
+                "description": "A test tool",
+                "inputSchema": {"type": "object", "properties": {}},
+            }
+        ]
+    return {"jsonrpc": "2.0", "id": req_id, "result": {"tools": tools}}
+
+
 class TestMcpSession:
     """Tests for McpSession."""
 
-    def _server_info_response(
-        self, name: str = "test-server", version: str = "1.0"
-    ) -> dict:
-        return {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "result": {
-                "protocolVersion": "2024-11-05",
-                "capabilities": {},
-                "serverInfo": {"name": name, "version": version},
-            },
-        }
-
-    def _tools_response(self, tools: list[dict] | None = None) -> dict:
-        if tools is None:
-            tools = [
-                {
-                    "name": "test_tool",
-                    "description": "A test tool",
-                    "inputSchema": {"type": "object", "properties": {}},
-                }
-            ]
-        return {"jsonrpc": "2.0", "id": 2, "result": {"tools": tools}}
-
     def test_initialize_sends_correct_request(self) -> None:
-        transport = FakeTransport([self._server_info_response()])
+        transport = FakeTransport([_server_info_response()])
         session = McpSession(transport)
         session.initialize()
 
@@ -75,7 +80,7 @@ class TestMcpSession:
         assert params["clientInfo"]["name"] == "mcp-test-driver"
 
     def test_initialize_sends_notification(self) -> None:
-        transport = FakeTransport([self._server_info_response()])
+        transport = FakeTransport([_server_info_response()])
         session = McpSession(transport)
         session.initialize()
 
@@ -83,12 +88,20 @@ class TestMcpSession:
         assert transport.notifications[0]["method"] == "notifications/initialized"
 
     def test_initialize_stores_server_info(self) -> None:
-        transport = FakeTransport([self._server_info_response("my-server", "2.0")])
+        transport = FakeTransport([_server_info_response("my-server", "2.0")])
         session = McpSession(transport)
         session.initialize()
 
         assert session.server_info["name"] == "my-server"
         assert session.server_info["version"] == "2.0"
+
+    def test_initialize_stores_capabilities(self) -> None:
+        caps = {"resources": {}, "prompts": {}, "tools": {}}
+        transport = FakeTransport([_server_info_response(capabilities=caps)])
+        session = McpSession(transport)
+        session.initialize()
+
+        assert session.server_capabilities == caps
 
     def test_initialize_raises_on_none(self) -> None:
         transport = FakeTransport([None])
@@ -97,7 +110,7 @@ class TestMcpSession:
             session.initialize()
 
     def test_list_tools_returns_tools(self) -> None:
-        transport = FakeTransport([self._tools_response()])
+        transport = FakeTransport([_tools_response()])
         session = McpSession(transport)
         # Skip initialize, go straight to list_tools
         session._id_seq = 1
@@ -132,8 +145,8 @@ class TestMcpSession:
     def test_id_sequence_increments(self) -> None:
         transport = FakeTransport(
             [
-                self._server_info_response(),
-                self._tools_response(),
+                _server_info_response(),
+                _tools_response(),
             ]
         )
         session = McpSession(transport)
@@ -146,8 +159,8 @@ class TestMcpSession:
     def test_reconnect_resets_id_and_calls_transport(self) -> None:
         transport = FakeTransport(
             [
-                self._server_info_response(),
-                self._tools_response(),
+                _server_info_response(),
+                _tools_response(),
             ]
         )
         session = McpSession(transport)
@@ -243,3 +256,169 @@ class TestMcpSessionRobustness:
         session = McpSession(transport)
         tools = session.list_tools()
         assert tools == []
+
+
+class TestResourceMethods:
+    """Tests for resource-related protocol methods."""
+
+    def test_list_resources(self) -> None:
+        resources = [{"uri": "file:///test.txt", "name": "test"}]
+        resp = {"jsonrpc": "2.0", "id": 1, "result": {"resources": resources}}
+        transport = FakeTransport([resp])
+        session = McpSession(transport)
+        result = session.list_resources()
+        assert result == resources
+
+    def test_list_resources_pagination(self) -> None:
+        page1 = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "resources": [{"uri": "a"}],
+                "nextCursor": "page2",
+            },
+        }
+        page2 = {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "result": {
+                "resources": [{"uri": "b"}],
+            },
+        }
+        transport = FakeTransport([page1, page2])
+        session = McpSession(transport)
+        result = session.list_resources()
+        assert len(result) == 2
+
+    def test_list_resource_templates(self) -> None:
+        templates = [{"uriTemplate": "file:///{path}", "name": "files"}]
+        resp = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {"resourceTemplates": templates},
+        }
+        transport = FakeTransport([resp])
+        session = McpSession(transport)
+        result = session.list_resource_templates()
+        assert result == templates
+
+    def test_read_resource(self) -> None:
+        resp = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "contents": [{"uri": "file:///test.txt", "text": "hello"}],
+            },
+        }
+        transport = FakeTransport([resp])
+        session = McpSession(transport)
+        result = session.read_resource("file:///test.txt")
+        assert result is not None
+        req = transport.sent[0]
+        assert req["params"]["uri"] == "file:///test.txt"
+
+
+class TestPromptMethods:
+    """Tests for prompt-related protocol methods."""
+
+    def test_list_prompts(self) -> None:
+        prompts = [{"name": "greet", "description": "Greeting"}]
+        resp = {"jsonrpc": "2.0", "id": 1, "result": {"prompts": prompts}}
+        transport = FakeTransport([resp])
+        session = McpSession(transport)
+        result = session.list_prompts()
+        assert result == prompts
+
+    def test_list_prompts_pagination(self) -> None:
+        page1 = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "prompts": [{"name": "a"}],
+                "nextCursor": "next",
+            },
+        }
+        page2 = {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "result": {
+                "prompts": [{"name": "b"}],
+            },
+        }
+        transport = FakeTransport([page1, page2])
+        session = McpSession(transport)
+        result = session.list_prompts()
+        assert len(result) == 2
+
+    def test_get_prompt_no_args(self) -> None:
+        resp = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "messages": [
+                    {"role": "user", "content": {"type": "text", "text": "Hi"}}
+                ],
+            },
+        }
+        transport = FakeTransport([resp])
+        session = McpSession(transport)
+        result = session.get_prompt("greet")
+        assert result is not None
+        req = transport.sent[0]
+        assert req["params"]["name"] == "greet"
+        assert "arguments" not in req["params"]
+
+    def test_get_prompt_with_args(self) -> None:
+        resp = {"jsonrpc": "2.0", "id": 1, "result": {"messages": []}}
+        transport = FakeTransport([resp])
+        session = McpSession(transport)
+        session.get_prompt("greet", {"name": "Alice"})
+        req = transport.sent[0]
+        assert req["params"]["arguments"] == {"name": "Alice"}
+
+
+class TestUtilityMethods:
+    """Tests for ping, logging, and completion."""
+
+    def test_ping(self) -> None:
+        resp = {"jsonrpc": "2.0", "id": 1, "result": {}}
+        transport = FakeTransport([resp])
+        session = McpSession(transport)
+        result = session.ping()
+        assert transport.sent[0]["method"] == "ping"
+        assert result is not None
+
+    def test_set_log_level(self) -> None:
+        resp = {"jsonrpc": "2.0", "id": 1, "result": {}}
+        transport = FakeTransport([resp])
+        session = McpSession(transport)
+        session.set_log_level("debug")
+        req = transport.sent[0]
+        assert req["method"] == "logging/setLevel"
+        assert req["params"]["level"] == "debug"
+
+    def test_complete(self) -> None:
+        resp = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "completion": {
+                    "values": ["opt1", "opt2"],
+                    "hasMore": False,
+                    "total": 2,
+                }
+            },
+        }
+        transport = FakeTransport([resp])
+        session = McpSession(transport)
+        values = session.complete("ref/prompt", "greet", "name", "Al")
+        assert values == ["opt1", "opt2"]
+        req = transport.sent[0]
+        assert req["method"] == "completion/complete"
+
+    def test_complete_empty_result(self) -> None:
+        resp = {"jsonrpc": "2.0", "id": 1, "result": {}}
+        transport = FakeTransport([resp])
+        session = McpSession(transport)
+        values = session.complete("ref/prompt", "greet", "name", "")
+        assert values == []
