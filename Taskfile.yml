@@ -9,23 +9,34 @@ tasks:
   lint:
     desc: Run ruff linter
     cmds:
-      - uv run ruff check mcp_test_driver/
+      - uv run ruff check src/mcp_test_driver/
 
   fmt:
     desc: Run ruff formatter
     cmds:
-      - uv run ruff format mcp_test_driver/
+      - uv run ruff format src/mcp_test_driver/
 
   typecheck:
     desc: Run ty type checker
     cmds:
       - uv run ty check
 
+  test:
+    desc: Run tests with pytest
+    cmds:
+      - uv run pytest {{.CLI_ARGS}}
+
+  test-all:
+    desc: Run tests across all Python versions with tox
+    cmds:
+      - uv run tox {{.CLI_ARGS}}
+
   check:
-    desc: Run all checks (lint + typecheck)
+    desc: Run all checks (lint + typecheck + test)
     cmds:
       - task: lint
       - task: typecheck
+      - task: test
 
   run:
     desc: Run mcp-test-driver (pass args after --)

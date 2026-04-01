@@ -1,17 +1,24 @@
-# Stage 3 Complete
+# Stage 4 Handoff
 
-All three stages are done.
+## Completed so far
 
-## Summary
+- Moved package to `src/mcp_test_driver/` layout
+- `pyproject.toml` updated with `module-root = "src"`, pytest/tox/tox-uv in dev deps
+- tox configured for py312, py313, py314 — all 85 tests pass on all versions
+- Test coverage across all modules:
+  - `test_parse.py` (16 tests) — key=val parsing, JSON, coercion, edge cases
+  - `test_color.py` (4 tests) — TTY vs non-TTY color output
+  - `test_completion.py` (18 tests) — dot-commands, CompletionState, completer
+  - `test_transport.py` (23 tests) — frame encoding, stdio mock, HTTP mock, SSE parser
+  - `test_protocol.py` (10 tests) — initialize, list_tools, call_tool, reconnect
+  - `test_repl.py` (8 tests) — SessionCache, _print_result
+  - `test_cli.py` (6 tests) — help flags, transport detection
 
-- **Stage 1**: Project scaffold, package structure, stdio transport, REPL with dot-commands and tab-completion
-- **Stage 2**: HTTP/SSE transport with urllib3 and Mcp-Session-Id tracking
-- **Stage 3**: Type annotations audit (switched to `Any` for JSON data), deleted old script, all checks pass
+## Next: robustness improvements
 
-## Current state
-
-- `ruff check` passes
-- `ty check` passes
-- Tested with `aifr mcp` (stdio) and `https://unicode.mcp.pennock.tech/mcp` (HTTP)
-- F1/Esc-H keybindings bound via readline macro (interactive terminals only)
-- Tab-completion works for commands, tools, arg keys, and enum values
+Areas to harden:
+- Error handling in transports (connection failures, timeouts, malformed JSON)
+- Graceful handling of subprocess crashes mid-session
+- HTTP transport: retry on transient failures, proper timeout handling
+- Protocol: handle malformed server responses without crashing
+- REPL: handle edge cases in user input

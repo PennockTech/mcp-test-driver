@@ -39,13 +39,29 @@ build-backend = "uv_build"
 dev = [
   "ruff",
   "ty",
+
+  "pytest",
+  "tox",
+  "tox-uv",
 ]
 
 [tool.uv.build-backend]
-module-root = ""
+module-root = "src"
 
 [tool.ruff]
 target-version = "py312"
+src = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.tox]
+requires = ["tox-uv>=1.25"]
+env_list = ["py312", "py313", "py314"]
+
+[tool.tox.env_run_base]
+deps = ["pytest"]
+commands = [["pytest", { replace = "posargs", default = ["tests/"], extend = true }]]
 
 [tool.uv]
 exclude-newer = "3 days"

@@ -1,7 +1,8 @@
-# Stage 3 Tasks
+# Stage 4 Tasks — src layout, tests, robustness
 
-- [x] Run `ty check` and fix type issues (switched `dict[str, object]` → `dict[str, Any]`)
-- [x] Delete old `mcp_test_driver.py` from repo root
-- [x] `ruff check` and `ruff format` clean
-- [x] `ty check` passes clean
-- [x] Verify stdio and HTTP transports still work
+- [x] Move package to `src/` layout, update pyproject.toml
+- [x] Add pytest, tox, tox-uv to dev dependencies
+- [x] Configure tox for Python 3.12, 3.13, 3.14
+- [x] Implement test suite (85 tests across 6 test files)
+- [x] All tests pass on Python 3.12, 3.13, 3.14
+- [ ] Robustness improvements (in progress)
