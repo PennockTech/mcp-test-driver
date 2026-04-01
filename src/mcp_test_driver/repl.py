@@ -142,6 +142,7 @@ class Repl:
             rl_line += "  Warning: tab-completion and F1/Esc-h unavailable."
         print(dim(rl_line))
         print(dim('Type "/list" to see tools, "/help" for usage, Ctrl-D to exit.'))
+        print(dim("  Tool args: key=val  key=[a b]  key={k: v}  or raw JSON object."))
         tab_hint = "Tab-completion is available."
         if rl_name != "libedit":
             tab_hint += "  F1 or Esc-h for context help."
@@ -473,6 +474,8 @@ def _show_general_help() -> None:
     print("  Tool invocation:")
     print(f"    {bold('<tool>'):<24s}         call with no arguments")
     print(f"    {bold('<tool> key=val ...'):<24s}         call with keyword arguments")
+    print(f"    {bold('<tool> key=[a b] ...'):<24s}         list value")
+    print(f"    {bold('<tool> key=' + chr(123) + 'k: v' + chr(125)):<24s}         dict value")
     print(
         f"    {bold('<tool> ' + chr(123) + '...' + chr(125)):<24s}         call with raw JSON object"
     )
@@ -483,6 +486,8 @@ def _show_general_help() -> None:
     print(
         "    Strings:  all other values; quote with shell rules if they contain spaces"
     )
+    print("    Lists:    paths=[src/foo.py src/bar.py]  tags=[\"hello world\", foo, 42]")
+    print("    Dicts:    filter={type: file, recursive: true}")
     print()
     print(f"  Press {bold('Tab')} to complete, {bold('F1')}/{bold('Esc-h')} for help.")
     print()
