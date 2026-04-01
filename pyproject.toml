@@ -1,6 +1,6 @@
 [project]
 name = "mcp-test-driver"
-version = "0.1.0"
+version = "0.1.2"
 description = "Interactive REPL for testing any MCP server over stdio or HTTP"
 readme = "README.md"
 license = "ISC"

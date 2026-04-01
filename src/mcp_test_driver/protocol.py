@@ -55,7 +55,7 @@ class McpSession:
 
     PROTOCOL_VERSION = "2024-11-05"
     CLIENT_NAME = "mcp-test-driver"
-    CLIENT_VERSION = "0.1.0"
+    CLIENT_VERSION = "0.1.2"
 
     def __init__(self, transport: Transport) -> None:
         self.transport = transport
