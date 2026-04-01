@@ -16,7 +16,7 @@ from .completion import (
     setup_readline,
 )
 from .parse import parse_args
-from .transport import TransportError
+from .transport import TransportError, sanitize
 
 if TYPE_CHECKING:
     from .protocol import McpSession
@@ -95,7 +95,7 @@ class Repl:
         self._trace_enabled = True
 
     def run(self) -> None:
-        server_name = self.cache.server_info.get("name", "MCP server")
+        server_name = sanitize(str(self.cache.server_info.get("name", "MCP server")))
         print()
         print(bold(f"mcp-test-driver — connected to {server_name}"))
         print(dim('Type ".list" to see tools, ".help" for usage, Ctrl-D to exit.'))
@@ -164,8 +164,8 @@ class Repl:
 
     def _cmd_list(self) -> None:
         for t in self.cache.tools:
-            name = str(t.get("name", "?"))
-            desc = str(t.get("description", ""))
+            name = sanitize(str(t.get("name", "?")))
+            desc = sanitize(str(t.get("description", "")))
             print(f"  {bold(name)}: {dim(desc)}")
 
     def _cmd_describe(self, rest: str) -> None:

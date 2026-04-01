@@ -342,7 +342,9 @@ class TestHttpTransportRobustness:
         transport.trace = False
         transport._pool = MagicMock()
         transport._pool.request.side_effect = urllib3.exceptions.MaxRetryError(
-            pool=None, url="/", reason=Exception("Connection refused")  # type: ignore[arg-type]
+            pool=None,
+            url="/",
+            reason=Exception("Connection refused"),  # type: ignore[arg-type]
         )
 
         with pytest.raises(TransportError, match="Connection failed"):

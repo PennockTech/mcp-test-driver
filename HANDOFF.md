@@ -1,34 +1,60 @@
-# Stage 4 Complete
+# Stage 5 Complete — Security Hardening
 
-## Summary
+## Threat model
 
-- Moved package to `src/mcp_test_driver/` layout
-- 105 tests passing on Python 3.12, 3.13, 3.14 via tox
-- Comprehensive robustness hardening across all modules
+Analyzed from the perspective of a malicious remote MCP server attacking
+this client.  Three parallel security audits (MCP spec researcher, malicious
+server attacker, HTTP/TLS specialist) identified vulnerabilities across
+all modules.
 
-## Robustness changes
+## Changes
 
-### transport.py
-- New `TransportError` exception for transport-level failures
-- `StdioTransport._launch()`: catches FileNotFoundError, PermissionError, OSError
-- `StdioTransport._send()`: catches BrokenPipeError, OSError
-- `StdioTransport._recv()`: catches malformed JSON, returns None with warning
-- `StdioTransport.close()`: catches OSError on stdin.close()
-- `HttpTransport._post()`: catches urllib3 connection errors, adds timeout
-- `HttpTransport._post()`: catches malformed JSON responses, uses try/finally for release_conn
+### transport.py — Core security hardening
 
-### protocol.py
-- New `McpError` exception for JSON-RPC error responses
-- `_check_error()`: detects and raises on error objects
-- `initialize()`: validates result structure, warns on protocol version mismatch
-- `list_tools()`: validates response structure, returns empty list on malformed data
+- **Bounded reads**: `readline(MAX_LINE_BYTES)` for stdio (16 MiB);
+  `resp.read(MAX_RESPONSE_BYTES + 1)` for HTTP; byte counter in SSE parser
+- **No redirects**: `Retry(redirect=0)` + explicit 3xx rejection (SSRF defense)
+- **HTTP status validation**: 4xx/5xx rejected before body parsing
+- **Timeout granularity**: Separate connect (10s) and read (60s) timeouts
+- **TLS errors**: Distinguished from connection errors in error messages
+- **Session ID sanitization**: Strips non-visible-ASCII per MCP spec (0x21-0x7E)
+- **Notification skip**: Stdio `request()` skips up to 32 server notifications
+  while awaiting the response with matching ID
+- **`sanitize()` function**: Strips ANSI escapes, OSC sequences, control chars
+  from server-supplied strings before terminal display
 
-### repl.py
-- Main loop catches `TransportError`, `ConnectionError`, and generic exceptions
-- `_print_result()`: handles JSON-RPC error responses, validates structure at every level
-- Tool invocation catches transport errors without crashing
+### protocol.py — Response validation
 
-### cli.py
-- Entry points catch `TransportError`, `McpError`, `ConnectionError`
-- User-friendly error messages to stderr, clean exit codes
-- KeyboardInterrupt handled at top level (exit 130)
+- **`_check_id()`**: Warns when response ID doesn't match request ID
+- **`_check_error()`**: Detects JSON-RPC error objects in responses
+- All three methods (initialize, list_tools, call_tool) validate IDs
+
+### completion.py — Input sanitization
+
+- Tool names sanitized and spaces replaced with underscores for readline safety
+- Empty tool names skipped
+- All descriptions, argument types, enum values sanitized before display
+
+### repl.py — Display sanitization
+
+- Server name, tool names, descriptions all run through `sanitize()`
+- JSON-RPC error responses handled with structured display
+
+## MCP spec findings (for future work)
+
+- **MCP Streamable HTTP** is the current transport (2025-03-26 spec);
+  the old HTTP+SSE transport is deprecated
+- **Two .well-known specs**: OAuth Protected Resource Metadata (RFC 9728,
+  mandatory) at `/.well-known/oauth-protected-resource`, and MCP Server
+  Discovery (SEP-1649/1960, proposed) at `/.well-known/mcp`
+- **DNS discovery**: Proposed but not standardized (SEP-1959: SRV/TXT/DANE)
+- **OAuth 2.1 auth**: Full auth flow with PKCE, resource indicators, etc.
+  Not implemented (test driver doesn't need auth for most testing)
+- **TLS 1.2 minimum**: Required by spec; our urllib3 default satisfies this
+
+## Test coverage
+
+- 129 tests across 8 test files
+- `test_security.py` (24 tests): sanitization, size limits, redirect
+  rejection, status validation, session ID sanitization, ID matching
+- All pass on Python 3.12, 3.13, 3.14

@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .color import bold, dim, red
+from .transport import sanitize
 
 
 # Dot-command definitions: (canonical, alias, description)
@@ -44,22 +45,32 @@ class CompletionState:
     def from_tools(cls, tools: list[dict[str, Any]]) -> CompletionState:
         state = cls()
         for t in tools:
-            name = str(t["name"])
+            # Sanitize all server-supplied data to prevent terminal injection
+            # and readline confusion.  Tool names must be safe for readline.
+            raw_name = str(t.get("name", ""))
+            name = sanitize(raw_name).replace(" ", "_")
+            if not name:
+                continue
             state.tool_names.add(name)
-            state.tool_descriptions[name] = str(t.get("description", ""))
+            state.tool_descriptions[name] = sanitize(str(t.get("description", "")))
             schema = t.get("inputSchema", {})
             state.tool_schemas[name] = schema
             props = schema.get("properties", {})
-            keys = sorted(props.keys())
-            state.tool_args[name] = [k + "=" for k in keys]
+            keys = sorted(sanitize(str(k)) for k in props.keys())
+            state.tool_args[name] = [k + "=" for k in keys if k]
             for k, v in props.items():
+                k = sanitize(str(k))
+                if not k:
+                    continue
                 if "enum" in v:
-                    state.arg_enums[f"{name}:{k}"] = [str(e) for e in v["enum"]]
+                    state.arg_enums[f"{name}:{k}"] = [
+                        sanitize(str(e)) for e in v["enum"]
+                    ]
                 desc_parts: list[str] = []
                 if "type" in v:
-                    desc_parts.append(f"type: {v['type']}")
+                    desc_parts.append(f"type: {sanitize(str(v['type']))}")
                 if "description" in v:
-                    desc_parts.append(str(v["description"]))
+                    desc_parts.append(sanitize(str(v["description"])))
                 if "enum" in v:
                     desc_parts.append(f"enum: {v['enum']}")
                 state.arg_descriptions[f"{name}:{k}"] = " | ".join(desc_parts)
@@ -182,9 +193,10 @@ def _show_tool_help(state: CompletionState, name: str) -> None:
     if props:
         print("  Arguments:")
         for k, v in sorted(props.items()):
+            k = sanitize(str(k))
             req = " (required)" if k in required else ""
-            typ = v.get("type", "")
-            d = v.get("description", "")
+            typ = sanitize(str(v.get("type", "")))
+            d = sanitize(str(v.get("description", "")))
             enum = v.get("enum")
             line = f"    {bold(k + '='):<24s} {dim(str(typ))}{req}"
             if d:

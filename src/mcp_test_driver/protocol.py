@@ -7,6 +7,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from .color import bold_err, eprint, red
+from .transport import sanitize
 
 if TYPE_CHECKING:
     from .transport import Transport
@@ -33,6 +34,18 @@ def _check_error(resp: dict[str, Any]) -> None:
         )
 
 
+def _check_id(resp: dict[str, Any], expected_id: int) -> None:
+    """Warn if the response ID doesn't match the expected request ID."""
+    resp_id = resp.get("id")
+    if resp_id != expected_id:
+        eprint(
+            red(
+                f"Warning: response id={resp_id} does not match "
+                f"request id={expected_id}"
+            )
+        )
+
+
 class McpSession:
     """Manages an MCP session over a transport."""
 
@@ -51,10 +64,11 @@ class McpSession:
 
     def initialize(self) -> dict[str, Any]:
         """Perform MCP initialize handshake."""
+        req_id = self._next_id()
         resp = self.transport.request(
             {
                 "jsonrpc": "2.0",
-                "id": self._next_id(),
+                "id": req_id,
                 "method": "initialize",
                 "params": {
                     "protocolVersion": self.PROTOCOL_VERSION,
@@ -68,6 +82,7 @@ class McpSession:
         )
         if resp is None:
             raise ConnectionError("Server closed connection during initialize")
+        _check_id(resp, req_id)
         _check_error(resp)
         result = resp.get("result")
         if not isinstance(result, dict):
@@ -75,13 +90,12 @@ class McpSession:
         info = result.get("serverInfo", {})
         if isinstance(info, dict):
             self.server_info = info
-        eprint(
-            bold_err(
-                f"Connected: {info.get('name', '?')} {info.get('version', '')}"
-                if isinstance(info, dict)
-                else "Connected: (unknown server)"
-            )
-        )
+        if isinstance(info, dict):
+            sname = sanitize(str(info.get("name", "?")))
+            sver = sanitize(str(info.get("version", "")))
+            eprint(bold_err(f"Connected: {sname} {sver}"))
+        else:
+            eprint(bold_err("Connected: (unknown server)"))
         server_version = result.get("protocolVersion", "")
         if server_version and server_version != self.PROTOCOL_VERSION:
             eprint(
@@ -101,16 +115,18 @@ class McpSession:
 
     def list_tools(self) -> list[dict[str, Any]]:
         """Fetch the list of available tools."""
+        req_id = self._next_id()
         resp = self.transport.request(
             {
                 "jsonrpc": "2.0",
-                "id": self._next_id(),
+                "id": req_id,
                 "method": "tools/list",
                 "params": {},
             }
         )
         if resp is None:
             raise ConnectionError("Server closed connection during tools/list")
+        _check_id(resp, req_id)
         _check_error(resp)
         result = resp.get("result", {})
         if isinstance(result, dict):
@@ -125,14 +141,18 @@ class McpSession:
         arguments: dict[str, Any],
     ) -> dict[str, Any] | None:
         """Invoke a tool by name with the given arguments."""
-        return self.transport.request(
+        req_id = self._next_id()
+        resp = self.transport.request(
             {
                 "jsonrpc": "2.0",
-                "id": self._next_id(),
+                "id": req_id,
                 "method": "tools/call",
                 "params": {"name": name, "arguments": arguments},
             }
         )
+        if resp is not None:
+            _check_id(resp, req_id)
+        return resp
 
     def reconnect(self) -> list[dict[str, Any]]:
         """Reconnect transport, re-initialize, and return fresh tools list."""
