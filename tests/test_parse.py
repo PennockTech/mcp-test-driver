@@ -74,3 +74,16 @@ class TestParseArgs:
     def test_unicode_value(self) -> None:
         result = parse_args("char=✓")
         assert result == {"char": "✓"}
+
+    def test_json_array_not_parsed_as_json(self) -> None:
+        # Arrays don't start with { so they go through key=val parsing.
+        # Tokens without = are silently ignored — result is empty dict.
+        result = parse_args("[1, 2, 3]")
+        assert result == {}
+
+    def test_json_object_starting_with_brace_but_invalid_type(self) -> None:
+        # Simulate edge case: technically this is valid JSON starting with {
+        # but json.loads would return a dict, so it's fine.
+        result = parse_args('{"key": [1, 2]}')
+        assert result == {"key": [1, 2]}
+        assert isinstance(result, dict)

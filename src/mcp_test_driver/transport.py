@@ -11,10 +11,12 @@ from __future__ import annotations
 
 import json
 import re
+import select
 import subprocess
+import threading
 from typing import Any, Protocol
 
-from .color import bold_err, cyan, eprint, red, yellow
+from .color import bold_err, cyan, dim, eprint, red, yellow
 
 # Size and timeout limits.
 MAX_LINE_BYTES = 16 * 1024 * 1024  # 16 MiB per JSON-RPC message
@@ -22,6 +24,7 @@ MAX_RESPONSE_BYTES = 16 * 1024 * 1024  # 16 MiB for HTTP response bodies
 HTTP_CONNECT_TIMEOUT = 10.0  # seconds to establish TCP+TLS
 HTTP_READ_TIMEOUT = 60.0  # seconds to wait for response data
 _MAX_ID_SKIP = 32  # max server notifications to skip while awaiting a response
+STDIO_READ_TIMEOUT = 120.0  # seconds to wait for a stdio response line
 
 # Characters that are unsafe for terminal display (control chars except
 # common whitespace).  Used to sanitize server-supplied strings.
@@ -40,6 +43,10 @@ def sanitize(s: str) -> str:
 
 class TransportError(Exception):
     """Raised when a transport-level error occurs."""
+
+
+class SessionExpiredError(TransportError):
+    """Raised when the server returns 404, indicating the session has expired."""
 
 
 class Transport(Protocol):
@@ -68,6 +75,18 @@ def _frame(obj: dict[str, Any]) -> bytes:
     return json.dumps(obj, separators=(",", ":")).encode() + b"\n"
 
 
+def _stderr_reader(pipe: Any) -> None:
+    """Read stderr from a subprocess and display sanitized lines."""
+    try:
+        for raw_line in pipe:
+            text = raw_line.decode("utf-8", errors="replace").rstrip("\r\n")
+            text = sanitize(text)
+            if text:
+                eprint(dim(f"[server stderr] {text}"))
+    except (OSError, ValueError):
+        pass  # pipe closed
+
+
 class StdioTransport:
     """MCP transport over subprocess stdin/stdout."""
 
@@ -75,6 +94,7 @@ class StdioTransport:
         self._command = command
         self.trace = True
         self._proc: subprocess.Popen[bytes] | None = None
+        self._stderr_thread: threading.Thread | None = None
         self._launch()
 
     def _launch(self) -> None:
@@ -83,6 +103,7 @@ class StdioTransport:
                 self._command,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
             )
         except FileNotFoundError:
             raise TransportError(f"Command not found: {self._command[0]}") from None
@@ -90,6 +111,15 @@ class StdioTransport:
             raise TransportError(f"Permission denied: {self._command[0]}") from None
         except OSError as e:
             raise TransportError(f"Cannot start {self._command[0]}: {e}") from None
+        # Read server stderr in a background thread so it doesn't block
+        # and so we can sanitize it before display.
+        if self._proc.stderr:
+            self._stderr_thread = threading.Thread(
+                target=_stderr_reader,
+                args=(self._proc.stderr,),
+                daemon=True,
+            )
+            self._stderr_thread.start()
 
     def _send(self, obj: dict[str, Any]) -> None:
         if self._proc is None or self._proc.stdin is None:
@@ -108,6 +138,19 @@ class StdioTransport:
         if self._proc is None or self._proc.stdout is None:
             raise TransportError("Not connected")
         try:
+            # Best-effort timeout: select detects if the OS-level buffer has
+            # any data.  If the server sends partial data without a newline,
+            # readline may still block — but this catches complete silence.
+            try:
+                ready, _, _ = select.select(
+                    [self._proc.stdout], [], [], STDIO_READ_TIMEOUT
+                )
+            except (ValueError, OSError):
+                ready = [True]  # fd closed or invalid; let readline detect it
+            if not ready:
+                raise TransportError(
+                    f"Server did not respond within {STDIO_READ_TIMEOUT:.0f}s"
+                )
             line = self._proc.stdout.readline(MAX_LINE_BYTES)
         except OSError as e:
             raise TransportError(f"Read error: {e}") from None
@@ -178,6 +221,9 @@ class StdioTransport:
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.wait()
+        if self._stderr_thread is not None:
+            self._stderr_thread.join(timeout=1)
+            self._stderr_thread = None
 
     def reconnect(self) -> None:
         eprint(bold_err("Reconnecting..."))
@@ -275,6 +321,12 @@ class HttpTransport:
                 )
 
             # Validate status code
+            if resp.status == 404 and self._session_id:
+                resp.read()
+                self._session_id = None
+                raise SessionExpiredError(
+                    "Session expired (HTTP 404) — re-initialize with /reconnect"
+                )
             if resp.status >= 400:
                 body_preview = resp.read(1024)
                 raise TransportError(
@@ -344,16 +396,18 @@ class HttpTransport:
                 data_lines.clear()
                 try:
                     last_message = json.loads(payload)
-                except json.JSONDecodeError:
-                    pass
+                except json.JSONDecodeError as e:
+                    eprint(red(f"Malformed JSON in SSE event: {e}"))
+                    eprint(red(f"  Payload: {payload[:200]!r}"))
 
         # Handle trailing data without final blank line
         if data_lines:
             payload = "\n".join(data_lines)
             try:
                 last_message = json.loads(payload)
-            except json.JSONDecodeError:
-                pass
+            except json.JSONDecodeError as e:
+                eprint(red(f"Malformed JSON in SSE event: {e}"))
+                eprint(red(f"  Payload: {payload[:200]!r}"))
 
         return last_message
 
@@ -364,6 +418,19 @@ class HttpTransport:
         self._post(obj)
 
     def close(self) -> None:
+        # Per MCP spec, send DELETE to terminate the session.
+        if self._session_id:
+            try:
+                self._pool.request(
+                    "DELETE",
+                    self._url,
+                    headers=self._headers(),
+                    preload_content=True,
+                    redirect=False,
+                )
+            except Exception:
+                pass  # best-effort; we're closing anyway
+            self._session_id = None
         self._pool.clear()
 
     def reconnect(self) -> None:

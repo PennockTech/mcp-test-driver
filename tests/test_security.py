@@ -16,6 +16,7 @@ from mcp_test_driver.transport import (
     MAX_LINE_BYTES,
     MAX_RESPONSE_BYTES,
     HttpTransport,
+    SessionExpiredError,
     StdioTransport,
     TransportError,
     sanitize,
@@ -291,3 +292,284 @@ class TestResponseIdMatching:
         _check_id({"jsonrpc": "2.0", "result": {}}, 1)
         captured = capsys.readouterr()
         assert "Warning" in captured.err
+
+
+class TestToolNamePrefixStripping:
+    """Tests that tool names with the builtin prefix are stripped."""
+
+    def test_slash_stripped_from_tool_name(self) -> None:
+        tools = [
+            {
+                "name": "/list",
+                "description": "Malicious tool shadowing /list",
+                "inputSchema": {"type": "object", "properties": {}},
+            }
+        ]
+        state = CompletionState.from_tools(tools)
+        # The leading / should be stripped so it can't shadow /list builtin
+        assert "list" in state.tool_names
+        assert "/list" not in state.tool_names
+
+    def test_multiple_slashes_stripped(self) -> None:
+        tools = [
+            {
+                "name": "///sneaky",
+                "description": "test",
+                "inputSchema": {"type": "object", "properties": {}},
+            }
+        ]
+        state = CompletionState.from_tools(tools)
+        assert "sneaky" in state.tool_names
+        assert "///sneaky" not in state.tool_names
+
+    def test_normal_tool_name_unchanged(self) -> None:
+        tools = [
+            {
+                "name": "unicode_search",
+                "description": "test",
+                "inputSchema": {"type": "object", "properties": {}},
+            }
+        ]
+        state = CompletionState.from_tools(tools)
+        assert "unicode_search" in state.tool_names
+
+    def test_tool_name_only_prefix_becomes_empty_and_skipped(self) -> None:
+        tools = [
+            {
+                "name": "///",
+                "description": "Only slashes",
+                "inputSchema": {"type": "object", "properties": {}},
+            }
+        ]
+        state = CompletionState.from_tools(tools)
+        assert len(state.tool_names) == 0
+
+
+class TestSseParseWarnings:
+    """Tests that malformed SSE JSON emits warnings."""
+
+    def test_malformed_sse_json_warns(self, capsys: pytest.CaptureFixture) -> None:  # type: ignore[type-arg]
+        transport = HttpTransport("https://example.com/mcp")
+        transport.trace = False
+        sse_data = [
+            b"data: not-valid-json\r\n",
+            b"\r\n",
+        ]
+        result = transport._parse_sse(iter(sse_data))
+        assert result is None
+        captured = capsys.readouterr()
+        assert "Malformed JSON in SSE" in captured.err
+
+    def test_valid_sse_no_warning(self, capsys: pytest.CaptureFixture) -> None:  # type: ignore[type-arg]
+        transport = HttpTransport("https://example.com/mcp")
+        transport.trace = False
+        sse_data = [
+            b'data: {"jsonrpc":"2.0","id":1,"result":{}}\r\n',
+            b"\r\n",
+        ]
+        result = transport._parse_sse(iter(sse_data))
+        assert result is not None
+        captured = capsys.readouterr()
+        assert "Malformed" not in captured.err
+
+
+class TestEnumSanitization:
+    """Tests that enum values are sanitized in tool help display."""
+
+    def test_enum_with_ansi_in_schema(self) -> None:
+        tools = [
+            {
+                "name": "test_tool",
+                "description": "test",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "mode": {
+                            "type": "string",
+                            "enum": ["\033[31mevil\033[0m", "good"],
+                        }
+                    },
+                },
+            }
+        ]
+        state = CompletionState.from_tools(tools)
+        # The stored enum values in arg_enums should be sanitized
+        enums = state.arg_enums["test_tool:mode"]
+        for val in enums:
+            assert "\033" not in val
+
+
+class TestSessionExpired:
+    """Tests that HTTP 404 with a session ID raises SessionExpiredError."""
+
+    def test_404_with_session_raises_expired(self) -> None:
+        transport = HttpTransport("https://example.com/mcp")
+        transport.trace = False
+        transport._session_id = "active-session"
+
+        mock_resp = MagicMock()
+        mock_resp.status = 404
+        mock_resp.headers = {"Content-Type": "text/plain"}
+        mock_resp.read.return_value = b"Not Found"
+        mock_resp.release_conn = MagicMock()
+
+        transport._pool = MagicMock()
+        transport._pool.request.return_value = mock_resp
+
+        with pytest.raises(SessionExpiredError, match="Session expired"):
+            transport.request({"jsonrpc": "2.0", "id": 1, "method": "test"})
+        # Session ID should be cleared
+        assert transport._session_id is None
+
+    def test_404_without_session_is_generic_error(self) -> None:
+        transport = HttpTransport("https://example.com/mcp")
+        transport.trace = False
+        transport._session_id = None  # no active session
+
+        mock_resp = MagicMock()
+        mock_resp.status = 404
+        mock_resp.headers = {"Content-Type": "text/plain"}
+        mock_resp.read.return_value = b"Not Found"
+        mock_resp.release_conn = MagicMock()
+
+        transport._pool = MagicMock()
+        transport._pool.request.return_value = mock_resp
+
+        with pytest.raises(TransportError, match="HTTP 404"):
+            transport.request({"jsonrpc": "2.0", "id": 1, "method": "test"})
+
+
+class TestHttpDeleteOnClose:
+    """Tests that HTTP DELETE is sent on session close."""
+
+    def test_close_sends_delete_when_session_active(self) -> None:
+        transport = HttpTransport("https://example.com/mcp")
+        transport._session_id = "active-session"
+        transport._pool = MagicMock()
+
+        transport.close()
+
+        transport._pool.request.assert_called_once()
+        call_args = transport._pool.request.call_args
+        assert call_args[0][0] == "DELETE"
+
+    def test_close_no_delete_without_session(self) -> None:
+        transport = HttpTransport("https://example.com/mcp")
+        transport._session_id = None
+        transport._pool = MagicMock()
+
+        transport.close()
+
+        transport._pool.request.assert_not_called()
+
+    def test_close_delete_failure_ignored(self) -> None:
+        transport = HttpTransport("https://example.com/mcp")
+        transport._session_id = "active-session"
+        transport._pool = MagicMock()
+        transport._pool.request.side_effect = Exception("network error")
+
+        # Should not raise
+        transport.close()
+
+
+class TestToolsListPagination:
+    """Tests that tools/list follows pagination cursors."""
+
+    def test_single_page(self) -> None:
+        from tests.test_protocol import FakeTransport
+
+        resp = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "tools": [{"name": "tool1", "description": "t1"}],
+            },
+        }
+        transport = FakeTransport([resp])
+        from mcp_test_driver.protocol import McpSession
+
+        session = McpSession(transport)
+        tools = session.list_tools()
+        assert len(tools) == 1
+
+    def test_multi_page(self) -> None:
+        from tests.test_protocol import FakeTransport
+
+        from mcp_test_driver.protocol import McpSession
+
+        page1 = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "tools": [{"name": "tool1"}],
+                "nextCursor": "page2",
+            },
+        }
+        page2 = {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "result": {
+                "tools": [{"name": "tool2"}],
+            },
+        }
+        transport = FakeTransport([page1, page2])
+        session = McpSession(transport)
+        tools = session.list_tools()
+        assert len(tools) == 2
+        assert tools[0]["name"] == "tool1"
+        assert tools[1]["name"] == "tool2"
+
+
+class TestStdioReadTimeout:
+    """Tests for select-based stdio read timeout."""
+
+    def test_timeout_raises_transport_error(self) -> None:
+        """Verify that a non-responsive server triggers a timeout error."""
+        mock_stdout = MagicMock()
+        mock_stdin = io.BytesIO()
+
+        mock_proc = MagicMock()
+        mock_proc.stdin = mock_stdin
+        mock_proc.stdout = mock_stdout
+        mock_proc.stderr = None
+        mock_proc.wait = MagicMock()
+
+        with patch(
+            "mcp_test_driver.transport.subprocess.Popen", return_value=mock_proc
+        ):
+            transport = StdioTransport(["fake"])
+
+        transport.trace = False
+
+        # Mock select to return empty (timeout) — test _recv directly
+        with patch(
+            "mcp_test_driver.transport.select.select", return_value=([], [], [])
+        ):
+            with pytest.raises(TransportError, match="did not respond"):
+                transport._recv()
+
+
+class TestStderrFiltering:
+    """Tests that subprocess stderr is captured and sanitized."""
+
+    def test_stderr_reader_sanitizes(self, capsys: pytest.CaptureFixture) -> None:  # type: ignore[type-arg]
+        from mcp_test_driver.transport import _stderr_reader
+
+        pipe = io.BytesIO(b"\033[31mevil output\033[0m\n")
+        _stderr_reader(pipe)
+        captured = capsys.readouterr()
+        assert "evil output" in captured.err
+        assert (
+            "\033[31m" not in captured.err
+        )  # ANSI stripped (but our dim() adds its own)
+        assert "[server stderr]" in captured.err
+
+    def test_stderr_reader_skips_empty_lines(
+        self, capsys: pytest.CaptureFixture
+    ) -> None:  # type: ignore[type-arg]
+        from mcp_test_driver.transport import _stderr_reader
+
+        pipe = io.BytesIO(b"\n\n")
+        _stderr_reader(pipe)
+        captured = capsys.readouterr()
+        assert "[server stderr]" not in captured.err

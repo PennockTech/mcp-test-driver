@@ -3,9 +3,10 @@
 """Tests for tab-completion and command definitions."""
 
 from mcp_test_driver.completion import (
-    DOT_COMMAND_ALIASES,
-    DOT_COMMAND_NAMES,
-    DOT_COMMANDS,
+    BUILTIN_ALIASES,
+    BUILTIN_COMMANDS,
+    BUILTIN_NAMES,
+    BUILTIN_PREFIX,
     CompletionState,
     make_completer,
 )
@@ -43,35 +44,35 @@ SAMPLE_TOOLS: list[dict] = [
 ]
 
 
-class TestDotCommands:
-    """Tests for dot-command definitions."""
+class TestBuiltinCommands:
+    """Tests for builtin command definitions."""
 
-    def test_all_commands_have_aliases(self) -> None:
-        for canonical, alias, _desc in DOT_COMMANDS:
-            assert canonical.startswith(".")
-            assert alias.startswith(".")
+    def test_all_commands_have_correct_prefix(self) -> None:
+        for canonical, alias, _desc in BUILTIN_COMMANDS:
+            assert canonical.startswith(BUILTIN_PREFIX)
+            assert alias.startswith(BUILTIN_PREFIX)
 
     def test_aliases_resolve_to_canonical(self) -> None:
-        for canonical, alias, _desc in DOT_COMMANDS:
-            assert DOT_COMMAND_ALIASES[alias] == canonical
+        for canonical, alias, _desc in BUILTIN_COMMANDS:
+            assert BUILTIN_ALIASES[alias] == canonical
 
     def test_canonical_names_in_set(self) -> None:
-        for canonical, _alias, _desc in DOT_COMMANDS:
-            assert canonical in DOT_COMMAND_NAMES
+        for canonical, _alias, _desc in BUILTIN_COMMANDS:
+            assert canonical in BUILTIN_NAMES
 
     def test_no_duplicate_aliases(self) -> None:
-        aliases = [alias for _, alias, _ in DOT_COMMANDS]
+        aliases = [alias for _, alias, _ in BUILTIN_COMMANDS]
         assert len(aliases) == len(set(aliases))
 
     def test_no_duplicate_canonicals(self) -> None:
-        canonicals = [c for c, _, _ in DOT_COMMANDS]
+        canonicals = [c for c, _, _ in BUILTIN_COMMANDS]
         assert len(canonicals) == len(set(canonicals))
 
     def test_quit_exists(self) -> None:
-        assert ".quit" in DOT_COMMAND_NAMES
+        assert "/quit" in BUILTIN_NAMES
 
     def test_help_exists(self) -> None:
-        assert ".help" in DOT_COMMAND_NAMES
+        assert "/help" in BUILTIN_NAMES
 
 
 class TestCompletionState:
@@ -108,16 +109,16 @@ class TestCompletionState:
 
     def test_all_first_words_includes_commands_and_tools(self) -> None:
         state = CompletionState.from_tools(SAMPLE_TOOLS)
-        assert ".help" in state.all_first_words
-        assert ".quit" in state.all_first_words
+        assert "/help" in state.all_first_words
+        assert "/quit" in state.all_first_words
         assert "unicode_search" in state.all_first_words
         # Aliases too
-        assert ".h" in state.all_first_words
+        assert "/h" in state.all_first_words
 
     def test_empty_tools(self) -> None:
         state = CompletionState.from_tools([])
         assert state.tool_names == set()
-        assert len(state.all_first_words) > 0  # still has dot-commands
+        assert len(state.all_first_words) > 0  # still has builtin commands
 
     def test_tool_with_no_properties(self) -> None:
         tools = [

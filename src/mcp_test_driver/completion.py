@@ -10,23 +10,26 @@ from typing import Any
 from .color import bold, dim, red
 from .transport import sanitize
 
+# Builtin command prefix.  Tool names are stripped of this prefix during
+# sanitization so that a malicious server cannot shadow builtins.
+BUILTIN_PREFIX = "/"
 
-# Dot-command definitions: (canonical, alias, description)
-DOT_COMMANDS: list[tuple[str, str, str]] = [
-    (".help", ".h", "Show help (or .help <tool> for tool help)"),
-    (".list", ".l", "List available tools"),
-    (".describe", ".d", "Show full schema for a tool"),
-    (".reconnect", ".rc", "Reconnect to the server"),
-    (".cache-flush", ".cf", "Clear cached tools, re-fetch from server"),
-    (".trace", ".t", "Toggle JSON-RPC protocol tracing"),
-    (".quit", ".q", "Exit"),
+# Builtin command definitions: (canonical, alias, description)
+BUILTIN_COMMANDS: list[tuple[str, str, str]] = [
+    ("/help", "/h", "Show help (or /help <tool> for tool help)"),
+    ("/list", "/l", "List available tools"),
+    ("/describe", "/d", "Show full schema for a tool"),
+    ("/reconnect", "/rc", "Reconnect to the server"),
+    ("/cache-flush", "/cf", "Clear cached tools, re-fetch from server"),
+    ("/trace", "/t", "Toggle JSON-RPC protocol tracing"),
+    ("/quit", "/q", "Exit"),
 ]
 
-DOT_COMMAND_NAMES: set[str] = set()
-DOT_COMMAND_ALIASES: dict[str, str] = {}  # alias → canonical
-for _canonical, _alias, _desc in DOT_COMMANDS:
-    DOT_COMMAND_NAMES.add(_canonical)
-    DOT_COMMAND_ALIASES[_alias] = _canonical
+BUILTIN_NAMES: set[str] = set()
+BUILTIN_ALIASES: dict[str, str] = {}  # alias → canonical
+for _canonical, _alias, _desc in BUILTIN_COMMANDS:
+    BUILTIN_NAMES.add(_canonical)
+    BUILTIN_ALIASES[_alias] = _canonical
 
 
 @dataclass
@@ -49,6 +52,8 @@ class CompletionState:
             # and readline confusion.  Tool names must be safe for readline.
             raw_name = str(t.get("name", ""))
             name = sanitize(raw_name).replace(" ", "_")
+            # Strip the builtin prefix so server tools cannot shadow builtins.
+            name = name.lstrip(BUILTIN_PREFIX)
             if not name:
                 continue
             state.tool_names.add(name)
@@ -75,7 +80,7 @@ class CompletionState:
                     desc_parts.append(f"enum: {v['enum']}")
                 state.arg_descriptions[f"{name}:{k}"] = " | ".join(desc_parts)
         state.all_first_words = (
-            DOT_COMMAND_NAMES | set(DOT_COMMAND_ALIASES.keys()) | state.tool_names
+            BUILTIN_NAMES | set(BUILTIN_ALIASES.keys()) | state.tool_names
         )
         return state
 
@@ -94,10 +99,10 @@ def make_completer(state: CompletionState):  # noqa: ANN201
         else:
             first_word = buf[:begin].split()[0] if buf[:begin].strip() else ""
             # Resolve aliases
-            if first_word in DOT_COMMAND_ALIASES:
-                first_word = DOT_COMMAND_ALIASES[first_word]
-            # .describe and .help take a tool name as argument
-            if first_word in (".describe", ".help"):
+            if first_word in BUILTIN_ALIASES:
+                first_word = BUILTIN_ALIASES[first_word]
+            # /describe and /help take a tool name as argument
+            if first_word in ("/describe", "/help"):
                 matches = sorted(n for n in state.tool_names if n.startswith(text))
             elif first_word in state.tool_names:
                 if "=" in text:
@@ -143,15 +148,15 @@ def show_context_help(state: CompletionState) -> None:
     first = parts[0]
 
     # Resolve alias
-    if first in DOT_COMMAND_ALIASES:
-        first = DOT_COMMAND_ALIASES[first]
+    if first in BUILTIN_ALIASES:
+        first = BUILTIN_ALIASES[first]
 
-    if first in DOT_COMMAND_NAMES:
-        # Help for a dot-command; if .help/.describe with a tool arg, show tool help
-        if first in (".help", ".describe") and len(parts) > 1:
+    if first in BUILTIN_NAMES:
+        # Help for a builtin; if /help or /describe with a tool arg, show tool help
+        if first in ("/help", "/describe") and len(parts) > 1:
             _show_tool_help(state, parts[1])
         else:
-            for canonical, alias, desc in DOT_COMMANDS:
+            for canonical, alias, desc in BUILTIN_COMMANDS:
                 if canonical == first:
                     print(f"\n  {bold(canonical)} ({alias}): {desc}")
                     break
@@ -173,9 +178,9 @@ def show_context_help(state: CompletionState) -> None:
 
 def _show_general_help() -> None:
     print("\n  Built-in commands:")
-    for canonical, alias, desc in DOT_COMMANDS:
+    for canonical, alias, desc in BUILTIN_COMMANDS:
         print(f"    {bold(canonical):24s} {alias:6s}  {dim(desc)}")
-    print(f"\n  Or type a tool name — use {bold('.list')} to see available tools.")
+    print(f"\n  Or type a tool name — use {bold('/list')} to see available tools.")
     print(
         f"  Press {bold('Tab')} to complete, {bold('F1')}/{bold('Esc-H')} for help.\n"
     )
@@ -203,7 +208,7 @@ def _show_tool_help(state: CompletionState, name: str) -> None:
                 line += f"  {d}"
             print(line)
             if enum:
-                print(f"      values: {', '.join(str(e) for e in enum)}")
+                print(f"      values: {', '.join(sanitize(str(e)) for e in enum)}")
     print()
 
 
@@ -231,7 +236,7 @@ def setup_readline(state: CompletionState) -> bool:
     import sys
 
     if sys.stdin.isatty():
-        macro = r'"\C-a\C-k.help \C-y\C-m"'
+        macro = r'"\C-a\C-k/help \C-y\C-m"'
         doc = getattr(readline, "__doc__", "") or ""
         if "libedit" in doc:
             readline.parse_and_bind("bind \\eH " + macro)

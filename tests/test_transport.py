@@ -55,6 +55,7 @@ class TestStdioTransport:
         mock_proc = MagicMock(spec=subprocess.Popen)
         mock_proc.stdin = mock_stdin
         mock_proc.stdout = mock_stdout
+        mock_proc.stderr = None
         mock_proc.wait = MagicMock()
 
         with patch("subprocess.Popen", return_value=mock_proc):

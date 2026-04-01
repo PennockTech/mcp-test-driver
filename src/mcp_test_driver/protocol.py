@@ -114,26 +114,39 @@ class McpSession:
         return resp
 
     def list_tools(self) -> list[dict[str, Any]]:
-        """Fetch the list of available tools."""
-        req_id = self._next_id()
-        resp = self.transport.request(
-            {
-                "jsonrpc": "2.0",
-                "id": req_id,
-                "method": "tools/list",
-                "params": {},
-            }
-        )
-        if resp is None:
-            raise ConnectionError("Server closed connection during tools/list")
-        _check_id(resp, req_id)
-        _check_error(resp)
-        result = resp.get("result", {})
-        if isinstance(result, dict):
-            tools = result.get("tools", [])
-            if isinstance(tools, list):
-                return tools
-        return []
+        """Fetch the list of available tools, following pagination cursors."""
+        all_tools: list[dict[str, Any]] = []
+        cursor: str | None = None
+        # Safety limit to prevent infinite pagination loops from a rogue server.
+        max_pages = 100
+        for _ in range(max_pages):
+            req_id = self._next_id()
+            params: dict[str, Any] = {}
+            if cursor is not None:
+                params["cursor"] = cursor
+            resp = self.transport.request(
+                {
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "method": "tools/list",
+                    "params": params,
+                }
+            )
+            if resp is None:
+                raise ConnectionError("Server closed connection during tools/list")
+            _check_id(resp, req_id)
+            _check_error(resp)
+            result = resp.get("result", {})
+            if isinstance(result, dict):
+                tools = result.get("tools", [])
+                if isinstance(tools, list):
+                    all_tools.extend(tools)
+                cursor = result.get("nextCursor")
+            else:
+                break
+            if not cursor:
+                break
+        return all_tools
 
     def call_tool(
         self,

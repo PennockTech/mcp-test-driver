@@ -16,7 +16,10 @@ def parse_args(text: str) -> dict[str, Any]:
     if not text:
         return {}
     if text.startswith("{"):
-        return json.loads(text)  # type: ignore[no-any-return]
+        result = json.loads(text)
+        if not isinstance(result, dict):
+            raise ValueError(f"Expected a JSON object, got {type(result).__name__}")
+        return result
 
     result: dict[str, Any] = {}
     for token in shlex.split(text):

@@ -10,9 +10,10 @@ from typing import TYPE_CHECKING, Any
 
 from .color import bold, dim, red
 from .completion import (
+    BUILTIN_ALIASES,
+    BUILTIN_COMMANDS,
+    BUILTIN_PREFIX,
     CompletionState,
-    DOT_COMMAND_ALIASES,
-    DOT_COMMANDS,
     setup_readline,
 )
 from .parse import parse_args
@@ -98,7 +99,7 @@ class Repl:
         server_name = sanitize(str(self.cache.server_info.get("name", "MCP server")))
         print()
         print(bold(f"mcp-test-driver — connected to {server_name}"))
-        print(dim('Type ".list" to see tools, ".help" for usage, Ctrl-D to exit.'))
+        print(dim('Type "/list" to see tools, "/help" for usage, Ctrl-D to exit.'))
         print(dim("Tab-completion is available.  F1 or Esc-H for context help."))
         print()
 
@@ -118,12 +119,12 @@ class Repl:
             cmd = parts[0]
             rest = parts[1] if len(parts) > 1 else ""
 
-            if cmd in DOT_COMMAND_ALIASES:
-                cmd = DOT_COMMAND_ALIASES[cmd]
+            if cmd in BUILTIN_ALIASES:
+                cmd = BUILTIN_ALIASES[cmd]
 
             try:
-                if cmd.startswith("."):
-                    if not self._dispatch_dot(cmd, rest):
+                if cmd.startswith(BUILTIN_PREFIX):
+                    if not self._dispatch_builtin(cmd, rest):
                         break
                 else:
                     self._invoke_tool(cmd, rest)
@@ -134,25 +135,25 @@ class Repl:
             except Exception as e:
                 print(red(f"Unexpected error: {type(e).__name__}: {e}"))
 
-    def _dispatch_dot(self, cmd: str, rest: str) -> bool:
-        """Handle a dot-command.  Returns False if the REPL should exit."""
-        if cmd in (".quit",):
+    def _dispatch_builtin(self, cmd: str, rest: str) -> bool:
+        """Handle a builtin command.  Returns False if the REPL should exit."""
+        if cmd in ("/quit",):
             return False
-        if cmd == ".help":
+        if cmd == "/help":
             self._cmd_help(rest)
-        elif cmd == ".list":
+        elif cmd == "/list":
             self._cmd_list()
-        elif cmd == ".describe":
+        elif cmd == "/describe":
             self._cmd_describe(rest)
-        elif cmd == ".reconnect":
+        elif cmd == "/reconnect":
             self._cmd_reconnect()
-        elif cmd == ".cache-flush":
+        elif cmd == "/cache-flush":
             self._cmd_cache_flush()
-        elif cmd == ".trace":
+        elif cmd == "/trace":
             self._cmd_trace()
         else:
             print(red(f"Unknown command: {cmd}"))
-            print(dim('Type ".help" for usage.'))
+            print(dim('Type "/help" for usage.'))
         return True
 
     def _cmd_help(self, rest: str) -> None:
@@ -171,7 +172,7 @@ class Repl:
     def _cmd_describe(self, rest: str) -> None:
         name = rest.strip()
         if not name:
-            print(red("Usage: .describe <tool>"))
+            print(red("Usage: /describe <tool>"))
             return
         from .completion import _show_tool_help
 
@@ -197,7 +198,7 @@ class Repl:
 
     def _invoke_tool(self, name: str, rest: str) -> None:
         if name not in self.cache.completion.tool_names:
-            print(red(f"Unknown tool '{name}'."), dim("(type '.list' to see tools)"))
+            print(red(f"Unknown tool '{name}'."), dim("(type '/list' to see tools)"))
             return
 
         try:
@@ -234,13 +235,13 @@ def show_context_help_for(state: CompletionState, text: str) -> None:
 
         _show_tool_help(state, first)
     else:
-        print(red(f"Unknown: {first}"), dim("(type '.list' to see tools)"))
+        print(red(f"Unknown: {first}"), dim("(type '/list' to see tools)"))
 
 
 def _show_general_help() -> None:
     print()
-    print("  Built-in commands (dot-prefixed):")
-    for canonical, alias, desc in DOT_COMMANDS:
+    print("  Built-in commands (/-prefixed):")
+    for canonical, alias, desc in BUILTIN_COMMANDS:
         print(f"    {bold(canonical):24s} {alias:6s}  {dim(desc)}")
     print()
     print("  Tool invocation:")
