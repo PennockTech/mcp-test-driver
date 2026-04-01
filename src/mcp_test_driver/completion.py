@@ -103,10 +103,11 @@ def make_completer(state: CompletionState):  # noqa: ANN201
     """Return a readline completer function with closure over completion state."""
 
     def completer(text: str, idx: int) -> str | None:
-        import readline
-
-        buf = readline.get_line_buffer()
-        begin = readline.get_begidx()
+        rl = _get_readline()
+        if rl is None:
+            return None
+        buf = rl.get_line_buffer()
+        begin = rl.get_begidx()
 
         if begin == 0:
             matches = sorted(c for c in state.all_first_words if c.startswith(text))
@@ -151,12 +152,10 @@ def make_completer(state: CompletionState):  # noqa: ANN201
 
 def show_context_help(state: CompletionState) -> None:
     """Display context-sensitive help based on current readline buffer."""
-    try:
-        import readline
-
-        buf = readline.get_line_buffer().strip()
-    except ImportError:
+    rl = _get_readline()
+    if rl is None:
         return
+    buf = rl.get_line_buffer().strip()
 
     if not buf:
         _show_general_help()
@@ -230,6 +229,23 @@ def _show_tool_help(state: CompletionState, name: str) -> None:
     print()
 
 
+def _get_readline() -> object | None:
+    """Return the best available readline module, or None.
+
+    Preference order: gnureadline (always GNU) → readline (may be libedit).
+    """
+    try:
+        import gnureadline
+        return gnureadline
+    except ImportError:
+        pass
+    try:
+        import readline
+        return readline
+    except ImportError:
+        return None
+
+
 def _readline_is_libedit(rl: object) -> bool:
     """Return True if the readline module is backed by libedit/editline."""
     backend = getattr(rl, "backend", None)
@@ -246,15 +262,14 @@ def readline_info() -> tuple[str, str]:
     Name is 'libedit' or 'readline'.  Version is a 'major.minor' string, or
     'unknown' if no version information is available.
     """
-    try:
-        import readline
-    except ImportError:
+    rl = _get_readline()
+    if rl is None:
         return ("readline", "unknown")
 
-    lib_ver = getattr(readline, "_READLINE_LIBRARY_VERSION", "") or ""
-    ver_int = getattr(readline, "_READLINE_VERSION", None)
+    lib_ver = getattr(rl, "_READLINE_LIBRARY_VERSION", "") or ""
+    ver_int = getattr(rl, "_READLINE_VERSION", None)
 
-    is_libedit = _readline_is_libedit(readline)
+    is_libedit = _readline_is_libedit(rl)
     name = "libedit" if is_libedit else "readline"
 
     # _READLINE_LIBRARY_VERSION is e.g. "8.2" for GNU readline but
@@ -277,18 +292,17 @@ def schedule_restore_input(text: str) -> None:
     Called after the F1/Esc-h help macro to restore the line that was
     submitted as '/help <text>'.
     """
-    try:
-        import readline
-    except ImportError:
+    rl = _get_readline()
+    if rl is None:
         return
-    set_hook = getattr(readline, "set_pre_input_hook", None)
+    set_hook = getattr(rl, "set_pre_input_hook", None)
     if set_hook is None:
         return
 
     def _hook() -> None:
-        readline.set_pre_input_hook(None)
-        readline.insert_text(text)
-        readline.redisplay()
+        rl.set_pre_input_hook(None)  # type: ignore[union-attr]
+        rl.insert_text(text)  # type: ignore[union-attr]
+        rl.redisplay()  # type: ignore[union-attr]
 
     set_hook(_hook)
 
@@ -298,22 +312,22 @@ def setup_readline(state: CompletionState) -> bool:
 
     Returns True if readline was successfully configured.
     """
-    try:
-        import readline
-        import sys
-    except ImportError:
+    import sys
+
+    rl = _get_readline()
+    if rl is None:
         return False
 
-    readline.set_completer(make_completer(state))
-    readline.set_completer_delims(" ")
+    rl.set_completer(make_completer(state))
+    rl.set_completer_delims(" ")
 
-    is_libedit = _readline_is_libedit(readline)
+    is_libedit = _readline_is_libedit(rl)
 
     # Tab completion binding syntax differs between GNU readline and libedit.
     if is_libedit:
-        readline.parse_and_bind("bind ^I rl_complete")
+        rl.parse_and_bind("bind ^I rl_complete")
     else:
-        readline.parse_and_bind("tab: complete")
+        rl.parse_and_bind("tab: complete")
 
     # F1 and Esc-h: context-sensitive help.
     # Macro: go-to-start, insert "/help ", submit.  Prepending rather than
@@ -327,8 +341,8 @@ def setup_readline(state: CompletionState) -> bool:
     # letter 'e' unenterable), so skip them on libedit entirely.
     if sys.stdin.isatty() and not is_libedit:
         macro = r'"\C-a/help \C-m"'
-        readline.parse_and_bind(r'"\eh": ' + macro)     # Esc-h
-        readline.parse_and_bind(r'"\eOP": ' + macro)    # F1 (xterm/VT220)
-        readline.parse_and_bind(r'"\e[11~": ' + macro)  # F1 alternate
+        rl.parse_and_bind(r'"\eh": ' + macro)     # Esc-h
+        rl.parse_and_bind(r'"\eOP": ' + macro)    # F1 (xterm/VT220)
+        rl.parse_and_bind(r'"\e[11~": ' + macro)  # F1 alternate
 
     return True

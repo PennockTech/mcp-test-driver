@@ -21,6 +21,7 @@ keywords = [
 requires-python = ">=3.12"
 
 dependencies = [
+  "gnureadline",
   "urllib3>=2.0",
 ]
 

@@ -137,7 +137,10 @@ class Repl:
         print()
         print(bold(f"mcp-test-driver — connected to {server_name}"))
         rl_name, rl_version = readline_info()
-        print(dim(f"REPL using {rl_name} version {rl_version}."))
+        rl_line = f"REPL using {rl_name} version {rl_version}."
+        if rl_name == "libedit":
+            rl_line += "  Warning: tab-completion and F1/Esc-h unavailable."
+        print(dim(rl_line))
         print(dim('Type "/list" to see tools, "/help" for usage, Ctrl-D to exit.'))
         tab_hint = "Tab-completion is available."
         if rl_name != "libedit":
