@@ -1,12 +1,9 @@
-# Stage 1 Tasks
+# Stage 2 Tasks
 
-- [x] Create project scaffold (pyproject.toml, .editorconfig, .gitignore, LICENSE, README.md, Taskfile.yml)
-- [x] Implement `mcp_test_driver/color.py` — ANSI color helpers
-- [x] Implement `mcp_test_driver/parse.py` — key=val / JSON argument parsing
-- [x] Implement `mcp_test_driver/transport.py` — Transport protocol + StdioTransport
-- [x] Implement `mcp_test_driver/protocol.py` — McpSession
-- [x] Implement `mcp_test_driver/completion.py` — tab-completion for dot-commands and tools
-- [x] Implement `mcp_test_driver/repl.py` — REPL loop with dot-commands and session cache
-- [x] Implement `mcp_test_driver/cli.py` + `__init__.py` + `__main__.py` — entry points
-- [x] Test with `aifr mcp` stdio server
+- [x] Implement `HttpTransport` in `transport.py` with urllib3
+- [x] Implement SSE parser for `text/event-stream` responses
+- [x] Track `Mcp-Session-Id` header across requests
+- [x] Wire up `cli.py:_run_http()` to use HttpTransport
+- [x] Test with `https://unicode.mcp.pennock.tech/mcp`
+- [x] Fix readline bind errors when stdin is piped
 - [x] Run `ruff check` and `ruff format` clean

@@ -6,8 +6,6 @@ from __future__ import annotations
 
 import sys
 
-from .color import bold, dim
-
 
 USAGE = """\
 Usage: mcp-test-driver <command> [args...]    stdio transport
@@ -52,6 +50,15 @@ def _run_stdio(command: list[str]) -> None:
 
 
 def _run_http(url: str) -> None:
-    print(bold("HTTP transport"), dim("— not yet implemented (Stage 2)"))
-    print(f"  URL: {url}")
-    sys.exit(1)
+    from .protocol import McpSession
+    from .repl import Repl
+    from .transport import HttpTransport
+
+    transport = HttpTransport(url)
+    try:
+        session = McpSession(transport)
+        session.initialize()
+        repl = Repl(session)
+        repl.run()
+    finally:
+        transport.close()

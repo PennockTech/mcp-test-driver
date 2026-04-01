@@ -221,15 +221,19 @@ def setup_readline(state: CompletionState) -> bool:
     # and submits it.  The REPL intercepts .help and shows context help,
     # then the user gets a fresh prompt.
     # Macro: go-to-start, kill-to-end, type ".help ", yank-back, accept.
-    macro = r'"\C-a\C-k.help \C-y\C-m"'
-    doc = getattr(readline, "__doc__", "") or ""
-    if "libedit" in doc:
-        # libedit uses different bind syntax
-        readline.parse_and_bind("bind \\eH " + macro)
-        readline.parse_and_bind("bind \\eOP " + macro)
-    else:
-        readline.parse_and_bind(r'"\eH": ' + macro)
-        readline.parse_and_bind(r'"\eOP": ' + macro)
-        readline.parse_and_bind(r'"\e[11~": ' + macro)  # F1 alternate
+    # Only bind when stdin is a TTY — readline macro bindings emit errors
+    # to stderr when there is no terminal.
+    import sys
+
+    if sys.stdin.isatty():
+        macro = r'"\C-a\C-k.help \C-y\C-m"'
+        doc = getattr(readline, "__doc__", "") or ""
+        if "libedit" in doc:
+            readline.parse_and_bind("bind \\eH " + macro)
+            readline.parse_and_bind("bind \\eOP " + macro)
+        else:
+            readline.parse_and_bind(r'"\eH": ' + macro)
+            readline.parse_and_bind(r'"\eOP": ' + macro)
+            readline.parse_and_bind(r'"\e[11~": ' + macro)  # F1 alternate
 
     return True
