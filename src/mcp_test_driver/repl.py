@@ -15,6 +15,7 @@ from .completion import (
     BUILTIN_PREFIX,
     CompletionState,
     readline_info,
+    schedule_restore_input,
     setup_readline,
 )
 from .parse import parse_args
@@ -138,14 +139,17 @@ class Repl:
         rl_name, rl_version = readline_info()
         print(dim(f"REPL using {rl_name} version {rl_version}."))
         print(dim('Type "/list" to see tools, "/help" for usage, Ctrl-D to exit.'))
-        print(dim("Tab-completion is available.  F1 or Esc-H for context help."))
+        tab_hint = "Tab-completion is available."
+        if rl_name != "libedit":
+            tab_hint += "  F1 or Esc-h for context help."
+        print(dim(tab_hint))
         print()
 
         setup_readline(self.cache.completion)
 
         while True:
             try:
-                line = input("mcp> ").strip()
+                line = input("mcp> ").lstrip()
             except (EOFError, KeyboardInterrupt):
                 print()
                 break
@@ -219,9 +223,11 @@ class Repl:
         return True
 
     def _cmd_help(self, rest: str) -> None:
+        original = rest
         rest = rest.strip()
         if rest:
             show_context_help_for(self.cache.completion, rest)
+            schedule_restore_input(original)
         else:
             _show_general_help()
 
@@ -432,7 +438,7 @@ class Repl:
 
 
 def show_context_help_for(state: CompletionState, text: str) -> None:
-    """Show help for a partial input line (used by F1/Esc-H macro)."""
+    """Show help for a partial input line (used by F1/Esc-h macro)."""
     parts = text.strip().split()
     if not parts:
         _show_general_help()
@@ -475,5 +481,5 @@ def _show_general_help() -> None:
         "    Strings:  all other values; quote with shell rules if they contain spaces"
     )
     print()
-    print(f"  Press {bold('Tab')} to complete, {bold('F1')}/{bold('Esc-H')} for help.")
+    print(f"  Press {bold('Tab')} to complete, {bold('F1')}/{bold('Esc-h')} for help.")
     print()

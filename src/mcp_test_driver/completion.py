@@ -200,7 +200,7 @@ def _show_general_help() -> None:
         print(f"    {bold(canonical):24s} {alias:6s}  {dim(desc)}")
     print(f"\n  Or type a tool name — use {bold('/list')} to see available tools.")
     print(
-        f"  Press {bold('Tab')} to complete, {bold('F1')}/{bold('Esc-H')} for help.\n"
+        f"  Press {bold('Tab')} to complete, {bold('F1')}/{bold('Esc-h')} for help.\n"
     )
 
 
@@ -230,6 +230,16 @@ def _show_tool_help(state: CompletionState, name: str) -> None:
     print()
 
 
+def _readline_is_libedit(rl: object) -> bool:
+    """Return True if the readline module is backed by libedit/editline."""
+    backend = getattr(rl, "backend", None)
+    if backend is not None:
+        return backend == "editline"
+    doc = getattr(rl, "__doc__", "") or ""
+    lib_ver = getattr(rl, "_READLINE_LIBRARY_VERSION", "") or ""
+    return "libedit" in doc or "EditLine" in lib_ver
+
+
 def readline_info() -> tuple[str, str]:
     """Return (name, version) for the active readline library.
 
@@ -241,12 +251,10 @@ def readline_info() -> tuple[str, str]:
     except ImportError:
         return ("readline", "unknown")
 
-    backend = getattr(readline, "backend", None)
-    doc = getattr(readline, "__doc__", "") or ""
     lib_ver = getattr(readline, "_READLINE_LIBRARY_VERSION", "") or ""
     ver_int = getattr(readline, "_READLINE_VERSION", None)
 
-    is_libedit = backend == "editline" or "libedit" in doc or "EditLine" in lib_ver
+    is_libedit = _readline_is_libedit(readline)
     name = "libedit" if is_libedit else "readline"
 
     # _READLINE_LIBRARY_VERSION is e.g. "8.2" for GNU readline but
@@ -263,6 +271,28 @@ def readline_info() -> tuple[str, str]:
     return (name, version)
 
 
+def schedule_restore_input(text: str) -> None:
+    """Pre-fill the readline buffer with text on the next prompt.
+
+    Called after the F1/Esc-h help macro to restore the line that was
+    submitted as '/help <text>'.
+    """
+    try:
+        import readline
+    except ImportError:
+        return
+    set_hook = getattr(readline, "set_pre_input_hook", None)
+    if set_hook is None:
+        return
+
+    def _hook() -> None:
+        readline.set_pre_input_hook(None)
+        readline.insert_text(text)
+        readline.redisplay()
+
+    set_hook(_hook)
+
+
 def setup_readline(state: CompletionState) -> bool:
     """Configure readline with completion and help keybindings.
 
@@ -270,36 +300,35 @@ def setup_readline(state: CompletionState) -> bool:
     """
     try:
         import readline
+        import sys
     except ImportError:
         return False
 
     readline.set_completer(make_completer(state))
     readline.set_completer_delims(" ")
-    readline.parse_and_bind("tab: complete")
 
-    # F1 and Esc-H: context-sensitive help.
-    # Bind to a readline macro that prepends ".help " to the current line
-    # and submits it.  The REPL intercepts .help and shows context help,
-    # then the user gets a fresh prompt.
-    # Macro: go-to-start, kill-to-end, type ".help ", yank-back, accept.
-    # Only bind when stdin is a TTY — readline macro bindings emit errors
-    # to stderr when there is no terminal.
-    import sys
+    is_libedit = _readline_is_libedit(readline)
 
-    if sys.stdin.isatty():
-        macro = r'"\C-a\C-k/help \C-y\C-m"'
-        doc = getattr(readline, "__doc__", "") or ""
-        backend = getattr(readline, "backend", None)
-        is_libedit = backend == "editline" or "libedit" in doc
-        if is_libedit:
-            # libedit requires 'bind -s' for string macros; 'bind key string'
-            # (without -s) treats the string as a command name and emits
-            # 'bind: Invalid command' errors on startup.
-            readline.parse_and_bind("bind -s \\eH " + macro)
-            readline.parse_and_bind("bind -s \\eOP " + macro)
-        else:
-            readline.parse_and_bind(r'"\eH": ' + macro)
-            readline.parse_and_bind(r'"\eOP": ' + macro)
-            readline.parse_and_bind(r'"\e[11~": ' + macro)  # F1 alternate
+    # Tab completion binding syntax differs between GNU readline and libedit.
+    if is_libedit:
+        readline.parse_and_bind("bind ^I rl_complete")
+    else:
+        readline.parse_and_bind("tab: complete")
+
+    # F1 and Esc-h: context-sensitive help.
+    # Macro: go-to-start, insert "/help ", submit.  Prepending rather than
+    # kill/yank avoids kill-ring contamination: \C-k on an empty line does
+    # not update the kill ring, so a subsequent \C-y would yank stale content
+    # from a previous F1 press forever.  With prepend, an empty buffer yields
+    # "/help " with empty rest, which correctly falls through to general help.
+    # Only bind when stdin is a TTY — macro bindings emit errors to stderr
+    # when there is no terminal.
+    # libedit macro bindings corrupt key state (binding \eH/\eOP makes the
+    # letter 'e' unenterable), so skip them on libedit entirely.
+    if sys.stdin.isatty() and not is_libedit:
+        macro = r'"\C-a/help \C-m"'
+        readline.parse_and_bind(r'"\eh": ' + macro)     # Esc-h
+        readline.parse_and_bind(r'"\eOP": ' + macro)    # F1 (xterm/VT220)
+        readline.parse_and_bind(r'"\e[11~": ' + macro)  # F1 alternate
 
     return True
