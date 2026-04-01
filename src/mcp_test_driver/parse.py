@@ -174,7 +174,8 @@ def _split_at_depth0(text: str, stop_chars: str) -> list[str]:
             buf.append(c)
             i += 1
         elif c in ("]", "}"):
-            depth -= 1
+            if depth > 0:
+                depth -= 1
             buf.append(c)
             i += 1
         elif depth == 0 and c in stop_chars:
