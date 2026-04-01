@@ -92,7 +92,7 @@ class Repl:
             session.list_tools(),
             session.server_info,
         )
-        self._trace_enabled = True
+        self._trace_enabled = session.transport.trace
 
     def run(self) -> None:
         server_name = sanitize(str(self.cache.server_info.get("name", "MCP server")))

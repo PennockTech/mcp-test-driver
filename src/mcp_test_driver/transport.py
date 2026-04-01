@@ -145,11 +145,20 @@ class StdioTransport:
                 return None
             if resp.get("id") is not None:
                 return resp
-            # This is a notification (no id) — log and skip
-            method = resp.get("method", "?")
-            if self.trace:
-                eprint(yellow(f"  (skipped server notification: {method})"))
+            # This is a notification (no id) — always display it since
+            # we are a diagnostic tool and notifications are important.
+            self._show_notification(resp)
         return self._recv()
+
+    @staticmethod
+    def _show_notification(msg: dict[str, Any]) -> None:
+        """Display a server notification to stderr."""
+        method = msg.get("method", "?")
+        params = msg.get("params")
+        if params:
+            eprint(cyan(f"  *** notification: {method} {json.dumps(params)}"))
+        else:
+            eprint(cyan(f"  *** notification: {method}"))
 
     def notify(self, obj: dict[str, Any]) -> None:
         self._send(obj)

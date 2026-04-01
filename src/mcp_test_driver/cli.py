@@ -9,37 +9,58 @@ from typing import Any
 
 
 USAGE = """\
-Usage: mcp-test-driver <command> [args...]    stdio transport
-       mcp-test-driver <url>                  HTTP transport
+Usage: mcp-test-driver [options] <command> [args...]    stdio transport
+       mcp-test-driver [options] <url>                  HTTP transport
 
 Examples:
   mcp-test-driver aifr mcp
   mcp-test-driver character agent mcp
   mcp-test-driver https://unicode.mcp.pennock.tech/mcp
+  mcp-test-driver --no-trace aifr mcp
 
 Options:
-  -h, --help    Show this help message
+  -h, --help       Show this help message
+  --trace          Enable protocol tracing (default)
+  --no-trace       Disable protocol tracing at startup
 """
 
 
 def main() -> None:
-    if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help"):
-        print(USAGE)
-        sys.exit(0 if len(sys.argv) >= 2 else 1)
+    args = sys.argv[1:]
+    trace = True
 
-    target = sys.argv[1]
+    # Extract our flags before the command/URL
+    while args and args[0].startswith("-"):
+        flag = args.pop(0)
+        if flag in ("-h", "--help"):
+            print(USAGE)
+            sys.exit(0)
+        elif flag == "--trace":
+            trace = True
+        elif flag == "--no-trace":
+            trace = False
+        else:
+            print(f"Unknown option: {flag}", file=sys.stderr)
+            print(USAGE, file=sys.stderr)
+            sys.exit(1)
+
+    if not args:
+        print(USAGE)
+        sys.exit(1)
+
+    target = args[0]
 
     try:
         if target.startswith("http://") or target.startswith("https://"):
-            _run_http(target)
+            _run_http(target, trace=trace)
         else:
-            _run_stdio(sys.argv[1:])
+            _run_stdio(args, trace=trace)
     except KeyboardInterrupt:
         print()
         sys.exit(130)
 
 
-def _run_stdio(command: list[str]) -> None:
+def _run_stdio(command: list[str], *, trace: bool = True) -> None:
     from .transport import StdioTransport, TransportError
 
     try:
@@ -48,13 +69,14 @@ def _run_stdio(command: list[str]) -> None:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 
+    transport.trace = trace
     try:
         _run_session(transport)
     finally:
         transport.close()
 
 
-def _run_http(url: str) -> None:
+def _run_http(url: str, *, trace: bool = True) -> None:
     from .transport import HttpTransport
 
     try:
@@ -63,6 +85,7 @@ def _run_http(url: str) -> None:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 
+    transport.trace = trace
     try:
         _run_session(transport)
     finally:
