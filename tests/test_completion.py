@@ -63,7 +63,7 @@ class TestBuiltinCommands:
             assert canonical in BUILTIN_NAMES
 
     def test_no_duplicate_aliases(self) -> None:
-        aliases = [alias for _, alias, _ in BUILTIN_COMMANDS]
+        aliases = [alias for _, alias, _ in BUILTIN_COMMANDS if alias]
         assert len(aliases) == len(set(aliases))
 
     def test_no_duplicate_canonicals(self) -> None:

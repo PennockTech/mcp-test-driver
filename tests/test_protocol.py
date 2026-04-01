@@ -17,6 +17,7 @@ class FakeTransport:
         self.sent: list[dict] = []
         self.notifications: list[dict] = []
         self.trace = False
+        self.handler_registry = None  # set by McpSession
         self._closed = False
         self._reconnect_count = 0
 

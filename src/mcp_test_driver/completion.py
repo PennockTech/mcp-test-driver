@@ -26,6 +26,7 @@ BUILTIN_COMMANDS: list[tuple[str, str, str]] = [
     ("/prompt", "/p", "Get a prompt (with optional arguments)"),
     ("/ping", "", "Ping the server"),
     ("/loglevel", "/ll", "Set server log level"),
+    ("/roots", "", "Show/toggle roots capability (on [path] | off)"),
     ("/subscribe", "/sub", "Subscribe to resource updates"),
     ("/unsubscribe", "/unsub", "Unsubscribe from resource updates"),
     ("/reconnect", "/rc", "Reconnect to the server"),

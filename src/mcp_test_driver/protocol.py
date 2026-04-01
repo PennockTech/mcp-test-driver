@@ -7,6 +7,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from .color import bold_err, eprint, red
+from .handlers import HandlerRegistry, PingHandler
 from .transport import sanitize
 
 if TYPE_CHECKING:
@@ -61,6 +62,13 @@ class McpSession:
         self._id_seq = 0
         self.server_info: dict[str, Any] = {}
         self.server_capabilities: dict[str, Any] = {}
+        # Handler registry for server-to-client requests.
+        # Ping is always registered; other handlers (roots, etc.) are
+        # added via enable_roots() or directly on the registry.
+        self.handler_registry = HandlerRegistry()
+        self.handler_registry.register("ping", PingHandler())
+        # Give the transport a reference so it can dispatch server requests.
+        self.transport.handler_registry = self.handler_registry
 
     def _next_id(self) -> int:
         self._id_seq += 1
@@ -117,7 +125,11 @@ class McpSession:
         return all_items
 
     def initialize(self) -> dict[str, Any]:
-        """Perform MCP initialize handshake."""
+        """Perform MCP initialize handshake.
+
+        Client capabilities are derived from the handler registry —
+        if a roots handler is registered, we advertise roots support, etc.
+        """
         req_id = self._next_id()
         resp = self.transport.request(
             {
@@ -126,7 +138,7 @@ class McpSession:
                 "method": "initialize",
                 "params": {
                     "protocolVersion": self.PROTOCOL_VERSION,
-                    "capabilities": {},
+                    "capabilities": self.handler_registry.capabilities(),
                     "clientInfo": {
                         "name": self.CLIENT_NAME,
                         "version": self.CLIENT_VERSION,
@@ -276,6 +288,38 @@ class McpSession:
                 if isinstance(values, list):
                     return [str(v) for v in values]
         return []
+
+    # ── Client capabilities ────────────────────────────────────────────
+
+    def enable_roots(self, base_path: Any) -> None:
+        """Enable the roots capability, advertising base_path to the server.
+
+        Takes effect on the next initialize (i.e., after /reconnect).
+        base_path should be a pathlib.Path.
+        """
+        from .handlers import RootsHandler
+
+        handler = RootsHandler(base_path)
+        self.handler_registry.register("roots/list", handler)
+
+    def disable_roots(self) -> None:
+        """Disable the roots capability.
+
+        Takes effect on the next initialize (i.e., after /reconnect).
+        """
+        self.handler_registry.unregister("roots/list")
+
+    @property
+    def roots_handler(self) -> Any:
+        """Return the current RootsHandler, or None if roots are disabled."""
+        from .handlers import RootsHandler
+
+        registry = self.handler_registry
+        if registry.has("roots/list"):
+            handler = registry._handlers["roots/list"]
+            if isinstance(handler, RootsHandler):
+                return handler
+        return None
 
     # ── Session lifecycle ──────────────────────────────────────────────
 

@@ -5,6 +5,20 @@
 Defines the Transport protocol and provides StdioTransport for
 subprocess-based MCP servers and HttpTransport for HTTP endpoints
 using the MCP Streamable HTTP transport.
+
+Server-to-client requests (bidirectional MCP):
+
+  MCP allows the server to send JSON-RPC requests to the client.
+  Every message from the server is classified as one of:
+
+    - Response (has "id", no "method") → returned to the caller
+    - Notification (has "method", no "id") → displayed and skipped
+    - Server request (has both "method" and "id") → dispatched to a
+      handler in the HandlerRegistry, response sent back to the server
+
+  StdioTransport handles all three cases in its read loop.
+  HttpTransport currently does NOT support server-initiated requests
+  because that requires a long-lived GET SSE stream (not yet implemented).
 """
 
 from __future__ import annotations
@@ -53,6 +67,7 @@ class Transport(Protocol):
     """Abstract transport for MCP JSON-RPC communication."""
 
     trace: bool
+    handler_registry: Any  # HandlerRegistry | None — avoids circular import
 
     def request(self, obj: dict[str, Any]) -> dict[str, Any] | None:
         """Send a JSON-RPC request and return the response."""
@@ -93,6 +108,7 @@ class StdioTransport:
     def __init__(self, command: list[str]) -> None:
         self._command = command
         self.trace = True
+        self.handler_registry: Any = None  # set by McpSession
         self._proc: subprocess.Popen[bytes] | None = None
         self._stderr_thread: threading.Thread | None = None
         self._launch()
@@ -181,17 +197,62 @@ class StdioTransport:
         expected_id = obj.get("id")
         if expected_id is None:
             return self._recv()
-        # Skip server notifications that arrive before our response.
+        # Read messages from the server, handling notifications and
+        # server-to-client requests until we get our response.
         for _ in range(_MAX_ID_SKIP):
             resp = self._recv()
             if resp is None:
                 return None
-            if resp.get("id") is not None:
-                return resp
-            # This is a notification (no id) — always display it since
-            # we are a diagnostic tool and notifications are important.
-            self._show_notification(resp)
+            msg_method = resp.get("method")
+            msg_id = resp.get("id")
+            if msg_method is not None and msg_id is not None:
+                # Server-to-client request — dispatch and respond.
+                self._handle_server_request(msg_method, msg_id, resp.get("params", {}))
+                continue
+            if msg_method is not None and msg_id is None:
+                # Notification — always display since we are a diagnostic tool.
+                self._show_notification(resp)
+                continue
+            # Response to our request (has id, no method).
+            return resp
         return self._recv()
+
+    def _handle_server_request(
+        self,
+        method: str,
+        req_id: Any,
+        params: dict[str, Any],
+    ) -> None:
+        """Dispatch a server-to-client request to the handler registry.
+
+        If no handler is registered, responds with "method not supported".
+        The response is sent back to the server via stdin.
+        """
+        eprint(cyan(f"  <<< server request: {method} (id={req_id})"))
+        registry = self.handler_registry
+        if registry is not None and registry.has(method):
+            try:
+                result = registry.dispatch(method, params)
+                self._send({"jsonrpc": "2.0", "id": req_id, "result": result})
+            except Exception as e:
+                self._send(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": req_id,
+                        "error": {"code": -32603, "message": str(e)},
+                    }
+                )
+        else:
+            self._send(
+                {
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "error": {
+                        "code": -32601,
+                        "message": f"Method not supported: {method}",
+                    },
+                }
+            )
 
     @staticmethod
     def _show_notification(msg: dict[str, Any]) -> None:
@@ -253,6 +314,10 @@ class HttpTransport:
 
         self._url = url
         self.trace = True
+        # Server-to-client requests over HTTP require a long-lived GET SSE
+        # stream, which is not yet implemented.  The registry is stored for
+        # future use but dispatching is only active on StdioTransport today.
+        self.handler_registry: Any = None
         self._session_id: str | None = None
         self._verify_tls = verify_tls
 

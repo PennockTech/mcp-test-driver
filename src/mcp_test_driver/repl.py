@@ -198,6 +198,8 @@ class Repl:
             self._cmd_ping()
         elif cmd == "/loglevel":
             self._cmd_loglevel(rest)
+        elif cmd == "/roots":
+            self._cmd_roots(rest)
         elif cmd == "/subscribe":
             self._cmd_subscribe(rest)
         elif cmd == "/unsubscribe":
@@ -350,6 +352,45 @@ class Repl:
             return
         self.session.unsubscribe_resource(uri)
         print(dim(f"Unsubscribed from {uri}."))
+
+    def _cmd_roots(self, rest: str) -> None:
+        """Handle /roots [on [path] | off] — show or toggle the roots capability."""
+        from pathlib import Path
+
+        rest = rest.strip()
+        if not rest:
+            # Show current state
+            handler = self.session.roots_handler
+            if handler is None:
+                print(dim("Roots: disabled"))
+                print(dim("  Use /roots on [path] to enable, then /reconnect."))
+            else:
+                print(bold("Roots: enabled"))
+                print(f"  Base: {handler.base}")
+                for r in handler.roots:
+                    print(f"  {dim(r['uri'])}  {r.get('name', '')}")
+            return
+
+        parts = rest.split(None, 1)
+        subcmd = parts[0].lower()
+
+        if subcmd == "on":
+            path = Path(parts[1]) if len(parts) > 1 else Path.cwd()
+            try:
+                self.session.enable_roots(path)
+            except (OSError, ValueError) as e:
+                print(red(f"Cannot set roots: {e}"))
+                return
+            handler = self.session.roots_handler
+            if handler:
+                print(dim(f"Roots enabled for {handler.base}"))
+            print(dim("Run /reconnect for the server to see this."))
+        elif subcmd == "off":
+            self.session.disable_roots()
+            print(dim("Roots disabled."))
+            print(dim("Run /reconnect for the server to see this."))
+        else:
+            print(red("Usage: /roots [on [path] | off]"))
 
     def _cmd_reconnect(self) -> None:
         tools = self.session.reconnect()
