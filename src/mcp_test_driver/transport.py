@@ -190,7 +190,7 @@ class StdioTransport:
             return None
         if self.trace:
             eprint(yellow(f"<<< {json.dumps(obj)}"))
-        return obj  # type: ignore[no-any-return]
+        return obj
 
     def request(self, obj: dict[str, Any]) -> dict[str, Any] | None:
         self._send(obj)

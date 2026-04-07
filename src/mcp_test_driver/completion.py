@@ -235,7 +235,9 @@ def _get_readline() -> object | None:
     Preference order: gnureadline (always GNU) → readline (may be libedit).
     """
     try:
-        import gnureadline
+        # Beware: gnureadline installs a .so but no .py or .pyi, so `ty check` won't find it.
+        # Thus we tell ty to not complain about something it's failing to handle, rather than being wrong.
+        import gnureadline  # ty: ignore[unresolved-import]
         return gnureadline
     except ImportError:
         pass
