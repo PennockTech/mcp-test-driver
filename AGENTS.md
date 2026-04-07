@@ -103,6 +103,16 @@ are commented out in CI for now but **must** still be run locally.
 
 ## Things to be careful about
 
+- **`pyproject.toml` `[tool.uv] exclude-newer = "3 days"` is correct.**
+  Modern `uv` accepts a duration string here and resolves it to a static
+  timestamp written into `uv.lock` on every run.  Older `uv` (and older
+  `ruff`/`ty` that share its TOML parser) will emit a warning like
+  *"failed to parse year in date '3 days'"* — that warning means **your
+  tooling is stale**, not that the config is wrong.  Do not "fix" this by
+  rewriting it as a date.  Upgrade your local `uv`/`ruff`/`ty` instead
+  (or just ignore the warning; it does not block lint, type-check, or
+  tests).  If you ran `uv sync` with stale tooling and `uv.lock` got
+  rewritten, restore it: `git checkout -- uv.lock`.
 - **Readline portability**: macOS ships libedit-as-readline by default,
   which differs from GNU readline in binding syntax and lacks
   `set_pre_input_hook`.  Code in `completion.py` already handles both;
