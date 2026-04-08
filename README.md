@@ -178,6 +178,13 @@ uv run ty check
 uv run pytest tests/
 ```
 
+## AI Disclosure
+
+A LLM development tool was used extensively in the creation of this tool.
+
+(It's a tool for exploring services designed for LLMs to use, what did you
+expect?)
+
 ## License
 
 ISC — see [LICENSE](LICENSE).
