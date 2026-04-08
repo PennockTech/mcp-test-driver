@@ -4,11 +4,48 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Protocol, cast
 
 from .color import bold, dim, red
 from .transport import sanitize
+
+
+class ReadlineModule(Protocol):
+    """Structural type for the readline module (GNU readline or libedit).
+
+    Captures the subset of the stdlib `readline` C-extension API that this
+    module actually uses.  Both GNU readline (via the stdlib `readline` or
+    the third-party `gnureadline`) and BSD libedit (via stdlib `readline`
+    on macOS without `gnureadline`) expose these methods at runtime,
+    although there are divergences between them:
+
+    - Tab-completion bind syntax differs (handled at the call site).
+    - libedit historically lacks `set_pre_input_hook`; callers using it
+      should still defensively check via `getattr` before calling.
+    - Probe attributes such as ``backend``, ``__doc__``, and
+      ``_READLINE_LIBRARY_VERSION`` vary between implementations and are
+      not part of this protocol; access them via :func:`getattr`.
+    """
+
+    def get_line_buffer(self) -> str: ...
+    def get_begidx(self) -> int: ...
+    def set_completer(
+        self,
+        function: Callable[[str, int], str | None] | None = ...,
+        /,
+    ) -> None: ...
+    def set_completer_delims(self, string: str, /) -> None: ...
+    def parse_and_bind(self, string: str, /) -> None: ...
+    def insert_text(self, string: str, /) -> None: ...
+    def redisplay(self) -> None: ...
+    def set_pre_input_hook(
+        self,
+        function: Callable[[], object] | None = ...,
+        /,
+    ) -> None: ...
+
 
 # Builtin command prefix.  Tool names are stripped of this prefix during
 # sanitization so that a malicious server cannot shadow builtins.
@@ -229,24 +266,26 @@ def _show_tool_help(state: CompletionState, name: str) -> None:
     print()
 
 
-def _get_readline() -> object | None:
+def _get_readline() -> ReadlineModule | None:
     """Return the best available readline module, or None.
 
     Preference order: gnureadline (always GNU) → readline (may be libedit).
     """
     try:
-        import gnureadline
-        return gnureadline
+        # Beware: gnureadline installs a .so but no .py or .pyi, so `ty check` won't find it.
+        # Thus we tell ty to not complain about something it's failing to handle, rather than being wrong.
+        import gnureadline  # ty: ignore[unresolved-import]
+        return cast("ReadlineModule", gnureadline)
     except ImportError:
         pass
     try:
         import readline
-        return readline
+        return cast("ReadlineModule", readline)
     except ImportError:
         return None
 
 
-def _readline_is_libedit(rl: object) -> bool:
+def _readline_is_libedit(rl: ReadlineModule) -> bool:
     """Return True if the readline module is backed by libedit/editline."""
     backend = getattr(rl, "backend", None)
     if backend is not None:
@@ -295,14 +334,16 @@ def schedule_restore_input(text: str) -> None:
     rl = _get_readline()
     if rl is None:
         return
+    # libedit historically lacks set_pre_input_hook; probe defensively even
+    # though the protocol declares it.
     set_hook = getattr(rl, "set_pre_input_hook", None)
     if set_hook is None:
         return
 
     def _hook() -> None:
-        rl.set_pre_input_hook(None)  # type: ignore[union-attr]
-        rl.insert_text(text)  # type: ignore[union-attr]
-        rl.redisplay()  # type: ignore[union-attr]
+        rl.set_pre_input_hook(None)
+        rl.insert_text(text)
+        rl.redisplay()
 
     set_hook(_hook)
 

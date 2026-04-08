@@ -6,7 +6,6 @@ import sys
 import types
 from unittest.mock import patch
 
-import pytest
 
 from mcp_test_driver.completion import (
     BUILTIN_ALIASES,

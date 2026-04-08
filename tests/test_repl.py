@@ -266,7 +266,7 @@ class TestReplStartup:
         out = self._run_repl_once("libedit", "4.2", capsys)
         lines = out.splitlines()
         # The tab-completion hint line should not mention F1/Esc-h on libedit
-        tab_lines = [l for l in lines if "Tab-completion" in l]
+        tab_lines = [line for line in lines if "Tab-completion" in line]
         assert tab_lines
         for line in tab_lines:
             assert "F1" not in line
