@@ -25,7 +25,9 @@ src/mcp_test_driver/
   parse.py       # command-line argument parsing for the REPL
   color.py       # ANSI color helpers
 tests/           # pytest suite, mirrors src/ module-for-module
-docs/            # security model, MCP spec notes, future plans
+docs/            # security model, MCP spec notes, feature matrix, roadmap
+  specs/         # vendored upstream MCP schemas + conformance lists (do not edit)
+scripts/         # fetch-specs.sh refreshes docs/specs/
 .github/workflows/  # CI (tox across Python 3.12/3.13/3.14)
 Taskfile.yml     # `task` runner shortcuts (lint, typecheck, test, check)
 ```
@@ -119,6 +121,12 @@ are commented out in CI for now but **must** still be run locally.
   preserve those branches and the defensive `getattr` checks when
   refactoring.  See the `ReadlineModule` Protocol docstring.
 - **Terminal injection**: never `print()` raw server-supplied data.
+- **MCP spec revisions**: the protocol has a handshake era (2024-11-05
+  to 2025-11-25) and a stateless era (2026-07-28 onwards).  Check
+  `docs/mcp-feature-matrix.md` and the vendored schemas in `docs/specs/`
+  before assuming a method or field exists.  Do not hand-edit
+  `docs/specs/`; re-run `scripts/fetch-specs.sh`.  The planned work is
+  in `docs/roadmap-multi-version.md`.
 - **HTTP transport**: respect existing SSRF and redirect-handling logic
   in `transport.py`.
 - **JSON-RPC IDs**: do not reuse or guess IDs; the dispatcher matches

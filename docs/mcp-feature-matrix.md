@@ -1,0 +1,276 @@
+# MCP Feature Matrix
+
+Which Model Context Protocol features exist in which spec revision, and
+what mcp-test-driver does with each today.  This is the reference for the
+multi-version work described in [roadmap-multi-version.md](roadmap-multi-version.md).
+
+## Revisions
+
+| Revision | Status | Spec | Schema (vendored) |
+|---|---|---|---|
+| `2024-11-05` | released | [spec](https://modelcontextprotocol.io/specification/2024-11-05) | [`specs/2024-11-05/`](specs/2024-11-05/) |
+| `2025-03-26` | released | [spec](https://modelcontextprotocol.io/specification/2025-03-26) | [`specs/2025-03-26/`](specs/2025-03-26/) |
+| `2025-06-18` | released | [spec](https://modelcontextprotocol.io/specification/2025-06-18) | [`specs/2025-06-18/`](specs/2025-06-18/) |
+| `2025-11-25` | released | [spec](https://modelcontextprotocol.io/specification/2025-11-25) | [`specs/2025-11-25/`](specs/2025-11-25/) |
+| `2026-07-28` | **latest** released | [spec](https://modelcontextprotocol.io/specification/2026-07-28) | [`specs/2026-07-28/`](specs/2026-07-28/) |
+| `draft` | unreleased | [spec](https://modelcontextprotocol.io/specification/draft) | [`specs/draft/`](specs/draft/) |
+
+Notes:
+
+- The draft still declares `LATEST_PROTOCOL_VERSION = "2026-07-28"`.  As
+  of the vendored snapshot it differs from 2026-07-28 in only two ways:
+  - the OAuth Client ID Metadata Document reference moves to draft-03
+  - optional `_meta` is restored on `CreateMessageRequestParams`,
+    `ElicitRequestFormParams`, `ElicitRequestURLParams`, `ElicitResult`
+    and `ListRootsResult`
+- The next dated revision is targeted for **2027-03-30** (SEP-3398).
+- The TypeScript SDK still lists `2024-10-07` as supported.  It is a
+  pre-release string that predates 2024-11-05.
+- See [`specs/SOURCES`](specs/SOURCES) for the upstream commits.
+  Refresh with `scripts/fetch-specs.sh`.
+
+### Two eras
+
+The protocol has two eras, and 2026-07-28 is a clean break between them:
+
+- **Handshake era** (2024-11-05 through 2025-11-25):
+  - `initialize` / `notifications/initialized` negotiates one version for the connection.
+  - Over HTTP, an `Mcp-Session-Id` carries that state.
+  - The server may send JSON-RPC requests to the client.
+- **Modern (stateless) era** (2026-07-28 onwards):
+  - There is no handshake and no session.
+  - Every request carries `io.modelcontextprotocol/protocolVersion` and
+    `io.modelcontextprotocol/clientCapabilities` in `params._meta`.
+  - `server/discover` advertises the server's versions and capabilities.
+  - Server-to-client requests are carried inside results, using Multi
+    Round-Trip Requests (MRTR).
+
+A **dual-era client** works with both kinds of server:
+
+- **stdio:** probe with `server/discover`.
+  - A `DiscoverResult`, or a recognized modern error such as `-32022`, means the server is modern.
+  - Any other error, or a timeout, means it is legacy: fall back to `initialize`.
+- **HTTP:** send a modern request.
+  - If it returns a 4xx without a recognized modern error body, fall back to a legacy `initialize`.
+  - If that fails too, fall back to the deprecated HTTP+SSE transport.
+- The fallback must never be keyed to one specific error code.
+- Clients should cache the era per server process (stdio) or origin (HTTP).
+
+Source: `2026-07-28/basic/versioning` (backward compatibility),
+`basic/transports/stdio` and `basic/transports/streamable-http`.
+
+## Legend
+
+| Mark | Meaning |
+|---|---|
+| ✓ | present |
+| — | absent |
+| **new** | introduced in this revision |
+| ✗ | removed |
+| D | deprecated (still works; slated for removal under SEP-2596) |
+
+The **Today** column describes mcp-test-driver 0.1.2.
+
+## JSON-RPC methods and notifications
+
+Generated from the vendored `schema.json` files.  Direction: C→S is
+client to server, S→C is server to client.
+
+| Method | Dir | 2024-11-05 | 2025-03-26 | 2025-06-18 | 2025-11-25 | 2026-07-28 | Today |
+|---|---|---|---|---|---|---|---|
+| `initialize` | C→S | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ |
+| `notifications/initialized` | C→S | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ |
+| `server/discover` | C→S | — | — | — | — | **new** | — |
+| `ping` | both | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ (both directions) |
+| `notifications/cancelled` | both | ✓ | ✓ | ✓ | ✓ | ✓ | — |
+| `notifications/progress` | both | ✓ | ✓ | ✓ | ✓ | ✓ | displayed |
+| `tools/list` | C→S | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `tools/call` | C→S | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `notifications/tools/list_changed` | S→C | ✓ | ✓ | ✓ | ✓ | ✓ | displayed |
+| `resources/list` | C→S | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `resources/templates/list` | C→S | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `resources/read` | C→S | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `resources/subscribe` | C→S | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ |
+| `resources/unsubscribe` | C→S | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ |
+| `notifications/resources/list_changed` | S→C | ✓ | ✓ | ✓ | ✓ | ✓ | displayed |
+| `notifications/resources/updated` | S→C | ✓ | ✓ | ✓ | ✓ | ✓ | displayed |
+| `prompts/list` | C→S | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `prompts/get` | C→S | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `notifications/prompts/list_changed` | S→C | ✓ | ✓ | ✓ | ✓ | ✓ | displayed |
+| `completion/complete` | C→S | ✓ | ✓ | ✓ | ✓ | ✓ | API only; buggy for `ref/resource` |
+| `logging/setLevel` | C→S | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ |
+| `notifications/message` | S→C | ✓ | ✓ | ✓ | ✓ | ✓ (D) | displayed |
+| `subscriptions/listen` | C→S | — | — | — | — | **new** | — |
+| `notifications/subscriptions/acknowledged` | S→C | — | — | — | — | **new** | — |
+| `roots/list` | S→C | ✓ | ✓ | ✓ | ✓ | ✓ in MRTR (D) | ✓ (stdio only) |
+| `notifications/roots/list_changed` | C→S | ✓ | ✓ | ✓ | ✓ | ✗ | advertised, never sent |
+| `sampling/createMessage` | S→C | ✓ | ✓ | ✓ | ✓ | ✓ in MRTR (D) | — |
+| `elicitation/create` | S→C | — | — | **new** | ✓ | ✓ in MRTR | — |
+| `notifications/elicitation/complete` | S→C | — | — | — | **new** | ✗ | — |
+| `tasks/get` | both | — | — | — | **new** | moved to extension | — |
+| `tasks/result` | both | — | — | — | **new** | ✗ | — |
+| `tasks/list` | both | — | — | — | **new** | ✗ | — |
+| `tasks/cancel` | both | — | — | — | **new** | moved to extension | — |
+| `notifications/tasks/status` | both | — | — | — | **new** | moved to extension | — |
+
+"In MRTR" means that in 2026-07-28 these request shapes still exist, but
+the server no longer sends them as JSON-RPC requests.  Instead it embeds
+them in an `InputRequiredResult.inputRequests` map.  The client answers by
+retrying its original request with `inputResponses` and the opaque
+`requestState`.  Only `tools/call`, `prompts/get` and `resources/read` may
+return `InputRequiredResult`.
+
+The tasks extension (`io.modelcontextprotocol/tasks`, SEP-2663) defines
+`tasks/get`, the new `tasks/update` and `tasks/cancel`, and lets servers
+return unsolicited task handles.
+
+## Lifecycle and envelope
+
+| Feature | 2024-11-05 | 2025-03-26 | 2025-06-18 | 2025-11-25 | 2026-07-28 | Today |
+|---|---|---|---|---|---|---|
+| Version negotiation | `initialize` | `initialize` | `initialize`; lifecycle rules become MUST | `initialize` | per request, in `_meta`; `server/discover`; `UnsupportedProtocolVersion` error lists the supported versions | offers 2024-11-05 only; warns on mismatch |
+| Per-request `_meta` keys `io.modelcontextprotocol/{protocolVersion, clientCapabilities}` (required) and `{clientInfo, logLevel}` (optional) | — | — | — | — | **new** | — |
+| `io.modelcontextprotocol/serverInfo` in result `_meta` | — | — | — | — | **new** (SHOULD) | — |
+| `resultType` (`complete` / `input_required`) on every result | — | — | — | — | **new**; treat absent as `complete` | — |
+| JSON-RPC batching | — | **new** (MUST receive) | ✗ | ✗ | ✗ | — |
+| `_meta` key naming rules (reserved `*.modelcontextprotocol/` and `*.mcp/` prefixes) | — | — | **new** | ✓ | ✓ | n/a |
+| OpenTelemetry `traceparent` / `tracestate` / `baggage` in `_meta` (SEP-414) | — | — | — | — | **new** | — |
+| `CacheableResult` (`ttlMs`, `cacheScope`) on list and read results | — | — | — | — | **new** (required) | — |
+| `Implementation.title` | — | — | **new** | ✓ | ✓ | — |
+| `Implementation.icons`, `description`, `websiteUrl` | — | — | — | **new** | ✓ | — |
+| `instructions` | ✓ | ✓ | ✓ | ✓ | in `DiscoverResult` | ignored |
+| `capabilities.extensions` | — | — | — | — | **new** | — |
+| `progressToken`; progress `message` | token | + `message` | ✓ | ✓ | ✓ | displayed only |
+| `notifications/cancelled.requestId` | required | required | required | optional | ✓ | — |
+| Pagination (`cursor` / `nextCursor`) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ (100-page cap) |
+
+### Error codes
+
+| Code | Meaning | Revisions |
+|---|---|---|
+| -32700, -32600, -32601, -32602, -32603 | Standard JSON-RPC codes | all |
+| -32002 | Resource not found | 2024-11-05 to 2025-11-25. Replaced by -32602 in 2026-07-28; clients SHOULD still accept it. |
+| -32042 | URL elicitation required | 2025-11-25 |
+| -32020 | `HeaderMismatch` | 2026-07-28 |
+| -32021 | `MissingRequiredClientCapability` | 2026-07-28 |
+| -32022 | `UnsupportedProtocolVersion` | 2026-07-28 |
+| -32000 to -32019 | Implementation-defined | 2026-07-28 policy |
+| -32020 to -32099 | Reserved for the spec | 2026-07-28 policy |
+
+## Capabilities
+
+| Capability | Side | 2024-11-05 | 2025-03-26 | 2025-06-18 | 2025-11-25 | 2026-07-28 |
+|---|---|---|---|---|---|---|
+| `experimental` | both | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `extensions` | both | — | — | — | — | **new** |
+| `roots.listChanged` | client | ✓ | ✓ | ✓ | ✓ | `roots` D |
+| `sampling` | client | `{}` | `{}` | `{}` | `{context?, tools?}` | D |
+| `elicitation` | client | — | — | **new** `{}` | `{form?, url?}` | ✓ |
+| `tasks` | both | — | — | — | **new** (`list`, `cancel`, `requests.*`) | ✗ (extension) |
+| `logging` | server | ✓ | ✓ | ✓ | ✓ | D |
+| `completions` | server | — | **new** | ✓ | ✓ | ✓ |
+| `prompts.listChanged` | server | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `resources.subscribe`, `resources.listChanged` | server | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `tools.listChanged` | server | ✓ | ✓ | ✓ | ✓ | ✓ |
+
+## Server features
+
+| Feature | 2024-11-05 | 2025-03-26 | 2025-06-18 | 2025-11-25 | 2026-07-28 | Today |
+|---|---|---|---|---|---|---|
+| Tool `annotations` (readOnly, destructive, idempotent and openWorld hints, `title`) | — | **new** | ✓ | ✓ | ✓ | not shown |
+| Tool `title`, `outputSchema`; result `structuredContent` | — | — | **new** | ✓ | ✓; any JSON Schema 2020-12 keyword / any JSON value | ignored |
+| `_meta` on Tool, Resource, Prompt and content | — | — | **new** | ✓ | ✓ | ignored |
+| Tool name format (1–128 characters, `[A-Za-z0-9_.-]`, SEP-986) | — | — | — | **new** (SHOULD) | ✓ | sanitized only |
+| Input validation errors returned as tool errors (`isError`, SEP-1303) | — | — | — | **new** | ✓ | n/a |
+| Tool / Resource / Prompt `icons` | — | — | — | **new** | ✓ | — |
+| Tool `execution.taskSupport` | — | — | — | **new** | ✗ (extension) | — |
+| Default JSON Schema dialect 2020-12 (SEP-1613) | — | — | — | **new** | ✓ | n/a |
+| `x-mcp-header` tool params mapped to HTTP headers (SEP-2243) | — | — | — | — | **new** | — |
+| Deterministic `tools/list` order | — | — | — | — | **new** (SHOULD) | n/a |
+| Annotations: `audience`, `priority` | ✓ | ✓ | + `lastModified` | ✓ | ✓ | — |
+| `completion/complete` | ✓ | ✓ (+ capability) | + `context.arguments` | ✓ | ✓ | no REPL command; `ref/resource` sends `name`, but the spec says `uri` |
+| Log level | `logging/setLevel` | ✓ | ✓ | ✓ | per request, `_meta` `logLevel` | `/loglevel` |
+| Change notifications | unsolicited | unsolicited | unsolicited | unsolicited | opt in via `subscriptions/listen` | displayed; cache not refreshed |
+
+### Content block types
+
+| Type | 2024-11-05 | 2025-03-26 | 2025-06-18 | 2025-11-25 | 2026-07-28 | Today |
+|---|---|---|---|---|---|---|
+| `text` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ (not sanitized) |
+| `image` | ✓ | ✓ | ✓ | ✓ | ✓ | prints empty text |
+| `resource` (embedded) | ✓ | ✓ | ✓ | ✓ | ✓ | prints empty text |
+| `audio` | — | **new** | ✓ | ✓ | ✓ | prints empty text |
+| `resource_link` | — | — | **new** | ✓ | ✓ | prints empty text |
+| `tool_use` / `tool_result` (sampling only) | — | — | — | **new** | ✓ | — |
+
+## Client features (server to client)
+
+| Feature | 2024-11-05 | 2025-03-26 | 2025-06-18 | 2025-11-25 | 2026-07-28 | Today |
+|---|---|---|---|---|---|---|
+| Delivery | JSON-RPC request | request | request | request | MRTR (`InputRequiredResult`) | requests, stdio only |
+| Roots | ✓ | ✓ | ✓ | ✓ | D | ✓ |
+| Sampling | ✓ | + audio | ✓ | + `tools`, `toolChoice`; `includeContext` values `thisServer` and `allServers` soft-D | D | — |
+| Elicitation, form mode | — | — | **new** | + defaults, titled and multi-select enums (SEP-1330, SEP-1034) | ✓ | — |
+| Elicitation, URL mode | — | — | — | **new** (SEP-1036) | ✓, without `elicitationId` or the complete notification | — |
+
+## Transports
+
+| Feature | 2024-11-05 | 2025-03-26 | 2025-06-18 | 2025-11-25 | 2026-07-28 | Today |
+|---|---|---|---|---|---|---|
+| stdio | ✓ | ✓ + batches | ✓ | stderr may carry any logging | server MUST NOT send requests | ✓ |
+| HTTP+SSE (GET → `endpoint` event, then POST) | ✓ | D | D | D | D (SEP-2596) | — |
+| Streamable HTTP POST (JSON or SSE response; 202 for notifications) | — | **new** | ✓ | ✓ | ✓ | ✓; the SSE parser keeps only the last event, dropping notifications and server requests |
+| `Mcp-Session-Id`; 404 means re-initialize; DELETE ends the session | — | ✓ | ✓ | ✓ | ✗ | ✓ |
+| GET listening stream (405 if unsupported) | — | ✓ | ✓ | ✓ | ✗ (`subscriptions/listen`) | — |
+| SSE resumability (`id`, `Last-Event-ID`) | — | ✓ | ✓ | + priming event, `retry`, polling (SEP-1699) | ✗; re-issue the request | — |
+| `MCP-Protocol-Version` header | — | only during auth discovery | **new** (required) | ✓ | required; must match `_meta` | — |
+| `Mcp-Method`, `Mcp-Name` headers (`=?base64?…?=` sentinel) | — | — | — | — | **new** (required) | — |
+| Invalid `Origin` | SHOULD validate | SHOULD | MUST validate | 403 | ✓ | n/a (server-side) |
+
+## Authorization (HTTP transports)
+
+| Feature | 2024-11-05 | 2025-03-26 | 2025-06-18 | 2025-11-25 | 2026-07-28 | Today |
+|---|---|---|---|---|---|---|
+| OAuth 2.1 + PKCE | — | **new** | ✓ | ✓; S256 must be advertised | ✓ | — |
+| AS metadata (RFC 8414) | — | **new**; falls back to `/authorize`, `/token`, `/register` | ✓ | + OIDC discovery | ✓ | — |
+| Protected Resource Metadata (RFC 9728) | — | — | **new**; `WWW-Authenticate resource_metadata` | + well-known fallback (path-inserted, then root) | ✓ | — |
+| Resource indicators (RFC 8707) | — | — | **new** | ✓ | ✓ | — |
+| Scope challenge and step-up on 403 `insufficient_scope` | — | — | — | **new** (SEP-835) | ✓ | — |
+| Client ID Metadata Documents | — | — | — | **new** (SEP-991) | ✓ | — |
+| Dynamic Client Registration (RFC 7591) | — | SHOULD | SHOULD | MAY | D; + `application_type` | — |
+| `iss` validation (RFC 9207) | — | — | — | — | **new** (SEP-2468) | — |
+| Credentials keyed by issuer | — | — | — | — | **new** (SEP-2352) | — |
+| Static bearer token / custom headers | — | — | — | — | — | — |
+
+## Extensions and discovery outside the dated core
+
+| Item | Status | Notes |
+|---|---|---|
+| Extensions mechanism (SEP-2133, SEP-3392) | Final | `capabilities.extensions["vendor/name"]`; off by default in SDKs |
+| Tasks extension `io.modelcontextprotocol/tasks` (SEP-2663) | Final | Replaces the 2025-11-25 core tasks |
+| MCP Apps `io.modelcontextprotocol/ui` (SEP-1865) | Final | `text/html;profile=mcp-app` resources referenced from tool `_meta` |
+| Skills extension (SEP-2640) | Final | |
+| OAuth client credentials (SEP-1046, ext-auth) | Final | Also in ext-auth: enterprise-managed authorization (SEP-990), DPoP, WIF |
+| Server Cards (SEP-2127) | Final | `<mcp-url>/server-card`; AI Catalog at `/.well-known/ai-catalog.json`. **No official `/.well-known/mcp`.** |
+
+## Conformance suite
+
+[`modelcontextprotocol/conformance`](https://github.com/modelcontextprotocol/conformance)
+publishes a frozen list of required scenarios for each revision.  They are
+vendored under [`specs/conformance/`](specs/conformance/).
+
+- **Server scenarios** include:
+  - `tools-*`, `resources-*` and `prompts-*`
+  - `completion-complete`
+  - `server-stateless`
+  - `caching`
+  - `sep-2164-resource-not-found`
+  - `dns-rebinding-protection`
+  - the `input-required-result-*` family (MRTR)
+- **Client scenarios** include:
+  - `request-metadata`
+  - `http-standard-headers`
+  - `http-custom-headers`
+  - `sep-2322-client-request-state`
+  - about 25 `auth/*` scenarios
+- Scenarios that apply to both eras must be run once under each.
