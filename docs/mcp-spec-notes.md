@@ -1,119 +1,249 @@
 # MCP Specification Notes
 
-Notes from the MCP specification research conducted during security hardening.
-Based on the 2025-03-26 spec at https://spec.modelcontextprotocol.io/ and
-related RFCs/proposals.
+Working notes on the parts of the MCP spec that matter most to a test
+driver: transports, sessions, discovery and authorization.
 
-## Transport Mechanisms
+These notes cover every released revision, from 2024-11-05 to
+**2026-07-28** (the latest).  For the feature-by-revision breakdown, see
+[mcp-feature-matrix.md](mcp-feature-matrix.md).  The authoritative schemas
+are vendored under [specs/](specs/).
 
-### 1. STDIO Transport
-- Local, single-client only
-- Newline-delimited JSON-RPC over stdin/stdout
-- No embedded newlines in messages
-- Server stderr for logging (inherited by client)
-- No built-in authentication (credentials from environment)
+## Eras
 
-### 2. Streamable HTTP Transport (current standard, 2025-03-26)
-- Replaces the deprecated HTTP+SSE transport (from 2024-11-05)
-- Single HTTP endpoint supporting POST and GET
-- POST: client-to-server messages (JSON-RPC in body)
-- GET: server-to-client listening (optional SSE stream)
-- Responses may be `application/json` or `text/event-stream`
-- Session management via `Mcp-Session-Id` header
-- Supports batching of JSON-RPC messages
-- Standard HTTP authentication (Bearer tokens, API keys, OAuth 2.0, mTLS)
+- **Handshake era** (2024-11-05, 2025-03-26, 2025-06-18, 2025-11-25):
+  - The client sends `initialize` with its preferred version.
+  - The server echoes that version, or counters with one it supports.
+  - The client sends `notifications/initialized`.
+  - The negotiated version and capabilities then hold for the connection
+    (stdio) or the `Mcp-Session-Id` session (HTTP).
+- **Modern / stateless era** (2026-07-28 onwards; SEP-2575, SEP-2567):
+  - There is no handshake and there are no sessions.
+  - Every request carries these keys in `params._meta`:
+    - `io.modelcontextprotocol/protocolVersion` (required)
+    - `io.modelcontextprotocol/clientCapabilities` (required)
+    - `io.modelcontextprotocol/clientInfo` (optional)
+    - `io.modelcontextprotocol/logLevel` (optional)
+  - A request missing a required key gets `-32602`, plus HTTP 400 over HTTP.
+  - Servers SHOULD return `io.modelcontextprotocol/serverInfo` in each result's `_meta`.
+  - `server/discover` (MUST implement) returns `supportedVersions`, `capabilities` and `instructions`.
+  - A version the server doesn't support gets `UnsupportedProtocolVersion` (`-32022`), whose data lists the supported versions.
+  - Every result carries `resultType`: `"complete"` or `"input_required"`.
+    Clients treat an absent `resultType` as `"complete"`.
 
-**Note**: There is no separate "SSE transport" in the current spec. The old
-HTTP+SSE transport from protocol version 2024-11-05 is deprecated.
+### Talking to both eras
 
-## Discovery Mechanisms
+From the backward-compatibility sections of `2026-07-28/basic/versioning`
+and the two transport pages:
 
-### .well-known URIs (Two Distinct Specs)
+- **stdio:** send `server/discover` first, with the preferred modern
+  version in `_meta`.
+  - A `DiscoverResult` means modern.
+  - A recognized modern error (`-32022`) means modern: retry with a
+    supported version, and do **not** fall back.
+  - Any other error, or no response within a reasonable timeout, means
+    legacy: fall back to `initialize`.
+  - The fallback must not be keyed to one specific error code. Legacy
+    servers answer unknown pre-`initialize` requests with various codes,
+    or not at all.
+- **Streamable HTTP:** send a modern request.
+  - Success, or a `400` whose body is a recognized modern error, means modern.
+  - Any other `4xx` means legacy: send `initialize`.
+  - If that fails too, try the deprecated HTTP+SSE transport.
+- Cache the result per server process (stdio) or per origin (HTTP).
+- A dual-era *server* picks its behaviour from how the client opens:
+  modern `_meta` gets stateless handling, and `initialize` gets the legacy
+  semantics for that process or session.
 
-**1. OAuth Protected Resource Metadata (RFC 9728) — Mandatory**
-- Endpoint: `/.well-known/oauth-protected-resource` (or sub-path variant)
-- Purpose: Advertise authorization server locations
-- Content: JSON with `authorization_servers` array
-- Discovery: Also via `WWW-Authenticate` header in 401 responses
-- Status: **Core spec, mandatory for servers requiring auth**
+## Server-to-client interaction
 
-**2. MCP Server Discovery — Proposed**
-- Endpoint: `/.well-known/mcp` or `/.well-known/mcp/server-card.json`
-- Purpose: Advertise MCP server capabilities without live connection
-- Content: Server name/version, available transports, capabilities, tool listings
-- Proposals: SEP-1649 (server cards), SEP-1960 (manifest endpoint)
-- Status: **Not yet in core spec, actively being implemented**
+- **Handshake era:** the server sends ordinary JSON-RPC requests to the
+  client (`roots/list`, `sampling/createMessage`, `elicitation/create`,
+  and `ping`).
+  - Over Streamable HTTP these arrive on the POST's SSE response stream or
+    on the GET listening stream.
+  - The client replies with a POST.
+- **2026-07-28, Multi Round-Trip Requests (SEP-2322):**
+  - Servers MUST NOT send requests at all.
+  - `tools/call`, `prompts/get` or `resources/read` may instead return
+    `{resultType: "input_required", inputRequests: {key: {method, params}}, requestState}`.
+  - The client fulfils each entry, then retries the original request under
+    a **new** request ID, with `inputResponses: {key: result}` and the
+    opaque `requestState`, which it returns unmodified.
+- Roots, Sampling and Logging are deprecated as of 2026-07-28 (SEP-2577),
+  with removal no earlier than 2027-07-28.
 
-### DNS-Based Discovery — Proposed (SEP-1959)
-- SRV records: `_mcp._tcp.example.com`
-- TXT records: `_mcp.yourdomain.com` for capability advertisement
-- DANE records: `_443._tcp.mcp.example.com` for certificate pinning
-- Status: **Not standardized, proposal under consideration**
+## Transports
 
-## Session Management
+### stdio
 
-- Server MAY assign `Mcp-Session-Id` during initialize response
-- ID must be globally unique, cryptographically secure
-- ID must contain only visible ASCII (0x21-0x7E)
-- Client MUST include the header in all subsequent requests
-- Server returns 404 if session has expired → client must re-initialize
-- Client can send HTTP DELETE to terminate session
-- SSE events may have `id` fields for stream resumption (`Last-Event-ID`)
+- The client launches the server as a subprocess.
+- Messages are newline-delimited JSON-RPC, with no embedded newlines.
+- stdout carries only MCP messages.
+- stderr is for logging. Since 2025-11-25, any logging is allowed there,
+  and clients SHOULD NOT treat stderr output as an error.
+- Batches (JSON arrays) were allowed only in 2025-03-26.
+- Shutdown: close the server's stdin, then send SIGTERM, then SIGKILL.
 
-## TLS Requirements
+### HTTP+SSE (2024-11-05; deprecated since 2025-03-26)
 
-- **TLS 1.2 minimum** required
-- **TLS 1.3 recommended** for production
-- All authorization endpoints MUST use HTTPS
-- Redirect URIs (except localhost) MUST use HTTPS
-- mTLS supported as authentication mechanism
-- No specific cipher suite requirements in core spec
+- The client GETs the SSE endpoint.
+- The server's first event is `endpoint`, whose data is the URI for POSTs.
+- Every client message is POSTed to that URI.
+- Every server message (responses included) arrives as an SSE `message`
+  event on the GET stream.
+- When following the `endpoint` URI, the client must stay on the same
+  origin, or a server could steer it at internal hosts (SSRF).
 
-## Authentication (OAuth 2.1)
+### Streamable HTTP (2025-03-26 onwards)
 
-- Based on OAuth 2.1 (draft-ietf-oauth-v2-1-13)
-- PKCE mandatory (S256 method preferred)
-- Resource Indicators (RFC 8707) mandatory in auth/token requests
-- Bearer tokens in `Authorization` header
-- Refresh tokens optional (`offline_access` scope)
-- Client registration: Client ID Metadata Documents, pre-registration, or
-  Dynamic Client Registration (RFC 7591)
+- There is one MCP endpoint.
+- **POST:**
+  - The client sends `Accept: application/json, text/event-stream`.
+  - A body carrying only notifications or responses gets `202 Accepted`.
+  - A body carrying a request gets either `application/json` or an SSE
+    stream, which may hold related notifications and requests before the
+    response.
+- **GET** (handshake era only):
+  - Opens an optional listening stream for unsolicited server messages.
+  - The server returns `405` if it doesn't support one.
+  - Removed in 2026-07-28 in favour of `subscriptions/listen`.
+- **Sessions** (2025-03-26 to 2025-11-25):
+  - The server may assign `Mcp-Session-Id` on the response that carries
+    the `InitializeResult`.
+  - Session IDs are visible ASCII only (0x21–0x7E).
+  - The client echoes the ID on every later request.
+  - `404` means the session expired, and the client must re-initialize.
+  - `DELETE` ends the session.
+  - Removed in 2026-07-28. State lives in server-minted handles passed as
+    tool arguments.
+- **`MCP-Protocol-Version` header:**
+  - Required from 2025-06-18 on.
+  - A server that sees no header may assume `2025-03-26`.
+  - An unsupported value gets `400`.
+  - In 2026-07-28 it must match the `_meta` version, or the server returns
+    `400` with `HeaderMismatch` (`-32020`).
+- **`Mcp-Method` / `Mcp-Name` headers** (2026-07-28, SEP-2243):
+  - Required on every POST.
+  - `Mcp-Name` carries `params.name` or `params.uri` for `tools/call`,
+    `prompts/get` and `resources/read`.
+  - Values that are not plain ASCII use `=?base64?…?=`.
+  - Tool parameters marked `x-mcp-header` become `Mcp-Param-*` headers.
+- **Resumability:**
+  - 2025-03-26 to 2025-11-25: SSE event `id`, then resume with GET and
+    `Last-Event-ID`.
+  - 2025-11-25 adds a priming event (an `id` with empty data) and the
+    `retry` field, which lets servers close connections and have clients
+    poll (SEP-1699).
+  - **Removed** in 2026-07-28: a broken stream loses its request, and the
+    client re-issues it under a new ID.
+- **Origin:** servers MUST validate `Origin`. Since 2025-11-25 an invalid
+  origin gets `403`.
+- **JSON-RPC batching** in POST bodies was valid only in 2025-03-26.
 
-### Auth Discovery
-Authorization servers must provide at least one of:
-1. OAuth 2.0 Authorization Server Metadata (RFC 8414)
-2. OpenID Connect Discovery 1.0
+## Discovery
 
-For issuer URLs with path components, clients try in order:
-1. `/.well-known/oauth-authorization-server/path`
-2. `/.well-known/openid-configuration/path`
-3. `/path/.well-known/openid-configuration`
+- **`server/discover`** (2026-07-28): live discovery of versions and
+  capabilities over the MCP connection itself.
+- **Server Cards** (SEP-2127, an extension, not core):
+  - The recommended location is `<streamable-http-url>/server-card`.
+  - The only well-known path defined is `/.well-known/ai-catalog.json`, an
+    AI Catalog that may link to or embed cards.
+  - Cards give identity, endpoints and `supportedProtocolVersions`; they
+    do not list tools.
+  - When a card and `server/discover` disagree, `server/discover` wins.
+- **There is no official `/.well-known/mcp`.**
+  - Earlier versions of these notes cited proposals for it (SEP-1649,
+    SEP-1960) and for DNS discovery (SEP-1959). Those were superseded by
+    SEP-2127.
+  - Third-party drafts with other paths (`/.well-known/mcp-server`, DNS
+    SRV/TXT) exist but are unofficial.
+- **OAuth Protected Resource Metadata** (RFC 9728): see below.
 
-## HTTP Redirect Handling
+## Authorization (HTTP only)
 
-- OAuth redirect URIs must be exact matches against pre-registered values
-- Only `localhost` or `HTTPS` redirect URIs allowed
-- DNS rebinding protection: validate `Origin` header, bind to 127.0.0.1
-- No MCP-specific redirect behavior beyond OAuth 2.1 compliance
+stdio servers take credentials from the environment instead.
 
-## Security Considerations
+- **2024-11-05:** no authorization spec.
+- **2025-03-26:** OAuth 2.1 with PKCE.
+  - The client discovers RFC 8414 metadata at
+    `{origin}/.well-known/oauth-authorization-server`.
+  - Without metadata, it falls back to `/authorize`, `/token` and
+    `/register`.
+  - Dynamic Client Registration is SHOULD.
+- **2025-06-18:**
+  - MCP servers are OAuth resource servers and MUST publish Protected
+    Resource Metadata (RFC 9728) listing `authorization_servers`.
+  - A `401` carries `WWW-Authenticate: Bearer resource_metadata="…"`.
+  - Clients send `resource=<canonical MCP URI>` (RFC 8707) in both the
+    authorization and token requests.
+  - Servers validate the token audience; passing tokens through is
+    forbidden.
+- **2025-11-25:**
+  - PRM can also be discovered at
+    `/.well-known/oauth-protected-resource/<path>`, then at the root.
+  - Clients must support both RFC 8414 and OIDC discovery. For an issuer
+    with a path, they try, in order:
+    `/.well-known/oauth-authorization-server/<path>`,
+    `/.well-known/openid-configuration/<path>`,
+    `/<path>/.well-known/openid-configuration`.
+  - Scope comes from the `WWW-Authenticate` `scope` if present, otherwise
+    from PRM `scopes_supported`, otherwise it is omitted.
+  - A `403 insufficient_scope` triggers step-up (SEP-835).
+  - Client registration priority: pre-registered, then Client ID Metadata
+    Documents (an HTTPS `client_id` URL, SEP-991), then DCR (now MAY).
+  - Clients must refuse to proceed if `code_challenge_methods_supported`
+    is missing.
+- **2026-07-28:**
+  - Clients validate `iss` in the authorization response (RFC 9207,
+    SEP-2468).
+  - Credentials are keyed by issuer, and the client re-registers if the
+    authorization server changes (SEP-2352).
+  - DCR is deprecated in favour of CIMD, and clients send
+    `application_type`.
+- **Extensions (ext-auth):** client credentials (SEP-1046),
+  enterprise-managed authorization (SEP-990), DPoP, WIF jwt-bearer.
+- Status codes:
+  - `401`: token missing or invalid
+  - `403`: insufficient scope (or invalid `Origin`)
+  - `400`: malformed request
 
-- Treat `Mcp-Session-Id` as untrusted input
-- Never tie authorization to session ID alone
-- Validate `Origin` headers on local servers
-- SSRF protection for authorization servers fetching client metadata
-- Token theft mitigation per OAuth 2.1 best practices
+## TLS
 
-## Key RFCs and References
+- TLS 1.2 is the minimum; 1.3 is recommended.
+- All authorization endpoints MUST use HTTPS.
+- Redirect URIs must be `localhost` or HTTPS.
 
-- MCP Spec: https://spec.modelcontextprotocol.io/
-- MCP Transports: https://modelcontextprotocol.io/specification/2025-03-26/basic/transports
-- MCP Authorization: https://modelcontextprotocol.io/specification/draft/basic/authorization
-- RFC 9728: OAuth 2.0 Protected Resource Metadata
-- RFC 8414: OAuth 2.0 Authorization Server Metadata
-- RFC 8707: Resource Indicators for OAuth 2.0
-- RFC 7591: OAuth 2.0 Dynamic Client Registration
-- OAuth 2.1: draft-ietf-oauth-v2-1-13
-- SEP-1649: MCP Server Cards (proposed)
-- SEP-1960: .well-known/mcp Discovery (proposed)
-- SEP-1959: DNS-Based MCP Server Identity Verification (proposed)
+## Redirects
+
+- OAuth redirect URIs must exactly match the registered values.
+- MCP defines no behaviour for HTTP redirects on the MCP endpoint itself.
+  mcp-test-driver refuses to follow them, as a defence against SSRF.
+
+## Security considerations for clients
+
+- Treat every server-supplied string as untrusted: tool names,
+  descriptions, `instructions`, URLs, stderr, and session IDs.
+- Never key authorization to a session ID.
+- Keep metadata fetches, the legacy SSE `endpoint` and the URLs in
+  URL-mode elicitation on expected origins, and never open them
+  automatically.
+- See [security-model.md](security-model.md).
+
+## Key references
+
+- MCP spec source: https://github.com/modelcontextprotocol/modelcontextprotocol
+- Rendered spec: https://modelcontextprotocol.io/specification/2026-07-28
+- Changelogs: `docs/specification/<rev>/changelog.mdx`, vendored as
+  [specs/&lt;rev&gt;/changelog.mdx](specs/)
+- Deprecated features registry: `docs/specification/2026-07-28/deprecated.mdx`
+- SEP index: https://modelcontextprotocol.io/seps
+- Conformance suite: https://github.com/modelcontextprotocol/conformance
+- RFCs:
+  - 9728 (Protected Resource Metadata)
+  - 8414 (AS Metadata)
+  - 8707 (Resource Indicators)
+  - 7591 (Dynamic Client Registration)
+  - 9207 (`iss` parameter)
+  - 8252 (native apps / loopback redirect)
+  - 8628 (device grant)
+- OAuth 2.1: draft-ietf-oauth-v2-1
