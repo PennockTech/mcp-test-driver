@@ -9,18 +9,18 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from . import commands
-from .color import bold, dim, red, yellow
+from .color import bold, dim, red
 from .completion import (
     CompletionState,
     readline_info,
     setup_readline,
 )
-from .diagnostics import Finding, Level
+from .diagnostics import Level, print_findings
 from .parse import parse_args
 from .protocol import McpError, RequestCancelled
 from .render import render_error, render_response
 from .sanitize import sanitize
-from .transport import SessionExpiredError, TransportError
+from .transport import AuthRequiredError, SessionExpiredError, TransportError
 from .transport.params import param_headers
 from .versions import Feature
 
@@ -120,18 +120,12 @@ class SessionCache:
         return items
 
 
-def print_findings(findings: list[Finding]) -> None:
-    for f in findings:
-        colour = red if f.level >= Level.ERROR else yellow if f.level >= Level.WARNING else dim
-        ref = f"  ({f.spec_ref})" if f.spec_ref else ""
-        print(colour(f"  [{f.label()}] {f.message}{ref}"))
-
-
 class Repl:
     """Interactive REPL for MCP tool invocation."""
 
-    def __init__(self, session: McpSession, *, cache: SessionCache | None = None) -> None:
+    def __init__(self, session: McpSession, *, cache: SessionCache | None = None, verify_tls: bool = True) -> None:
         self.session = session
+        self.verify_tls = verify_tls
         self.cache = cache if cache is not None else SessionCache.build(session)
         self.trace_enabled = session.transport.trace
         self.last_response: dict[str, Any] | None = None
@@ -206,6 +200,10 @@ class Repl:
             pass
         except SessionExpiredError as e:
             print(red(f"{e}"))
+        except AuthRequiredError as e:
+            self.session.last_www_authenticate = e.www_authenticate or None
+            print(red(f"{e}"))
+            print(dim("Run /auth discover to see what the server expects."))
         except TransportError as e:
             print(red(f"Transport error: {e}"))
         except ConnectionError as e:

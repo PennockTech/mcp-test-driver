@@ -134,7 +134,7 @@ return unsolicited task handles.
 | `resultType` (`complete` / `input_required`) on every result | — | — | — | — | **new**; treat absent as `complete` | ✓ checked; MRTR loop on `input_required` |
 | JSON-RPC batching | — | **new** (MUST receive) | ✗ | ✗ | ✗ | ✓ received (stdio, HTTP); `/raw` sends; flagged outside 2025-03-26 |
 | `_meta` key naming rules (reserved `*.modelcontextprotocol/` and `*.mcp/` prefixes) | — | — | **new** | ✓ | ✓ | `/meta` sets any key |
-| OpenTelemetry `traceparent` / `tracestate` / `baggage` in `_meta` (SEP-414) | — | — | — | — | **new** | `/meta` |
+| OpenTelemetry `traceparent` / `tracestate` / `baggage` in `_meta` (SEP-414) | — | — | — | — | **new** | ✓ `--otel`, `/otel`; `/meta` |
 | `CacheableResult` (`ttlMs`, `cacheScope`) on list and read results | — | — | — | — | **new** (required) | ✓ shown and checked |
 | `Implementation.title` | — | — | **new** | ✓ | ✓ | ✓ shown |
 | `Implementation.icons`, `description`, `websiteUrl` | — | — | — | **new** | ✓ | ✓ shown |
@@ -218,7 +218,7 @@ return unsolicited task handles.
 | Feature | 2024-11-05 | 2025-03-26 | 2025-06-18 | 2025-11-25 | 2026-07-28 | Driver |
 |---|---|---|---|---|---|---|
 | stdio | ✓ | ✓ + batches | ✓ | stderr may carry any logging | server MUST NOT send requests | ✓ |
-| HTTP+SSE (GET → `endpoint` event, then POST) | ✓ | D | D | D | D (SEP-2596) | — |
+| HTTP+SSE (GET → `endpoint` event, then POST) | ✓ | D | D | D | D (SEP-2596) | ✓ auto-fallback or `--transport sse`; same-origin endpoint only |
 | Streamable HTTP POST (JSON or SSE response; 202 for notifications) | — | **new** | ✓ | ✓ | ✓ | ✓ every SSE event routed |
 | `Mcp-Session-Id`; 404 means re-initialize; DELETE ends the session | — | ✓ | ✓ | ✓ | ✗ | ✓ |
 | GET listening stream (405 if unsupported) | — | ✓ | ✓ | ✓ | ✗ (`subscriptions/listen`) | ✓ `/listen` |
@@ -231,11 +231,11 @@ return unsolicited task handles.
 
 | Feature | 2024-11-05 | 2025-03-26 | 2025-06-18 | 2025-11-25 | 2026-07-28 | Driver |
 |---|---|---|---|---|---|---|
-| OAuth 2.1 + PKCE | — | **new** | ✓ | ✓; S256 must be advertised | ✓ | — |
-| AS metadata (RFC 8414) | — | **new**; falls back to `/authorize`, `/token`, `/register` | ✓ | + OIDC discovery | ✓ | — |
-| Protected Resource Metadata (RFC 9728) | — | — | **new**; `WWW-Authenticate resource_metadata` | + well-known fallback (path-inserted, then root) | ✓ | — |
+| OAuth 2.1 + PKCE | — | **new** | ✓ | ✓; S256 must be advertised | ✓ | discovery and checks (`/auth discover`) |
+| AS metadata (RFC 8414) | — | **new**; falls back to `/authorize`, `/token`, `/register` | ✓ | + OIDC discovery | ✓ | ✓ fetched and checked, incl. 2025-03-26 defaults |
+| Protected Resource Metadata (RFC 9728) | — | — | **new**; `WWW-Authenticate resource_metadata` | + well-known fallback (path-inserted, then root) | ✓ | ✓ header, then well-known, as specified |
 | Resource indicators (RFC 8707) | — | — | **new** | ✓ | ✓ | — |
-| Scope challenge and step-up on 403 `insufficient_scope` | — | — | — | **new** (SEP-835) | ✓ | — |
+| Scope challenge and step-up on 403 `insufficient_scope` | — | — | — | **new** (SEP-835) | ✓ | scope shown |
 | Client ID Metadata Documents | — | — | — | **new** (SEP-991) | ✓ | — |
 | Dynamic Client Registration (RFC 7591) | — | SHOULD | SHOULD | MAY | D; + `application_type` | — |
 | `iss` validation (RFC 9207) | — | — | — | — | **new** (SEP-2468) | — |

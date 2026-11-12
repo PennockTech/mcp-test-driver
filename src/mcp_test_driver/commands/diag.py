@@ -25,7 +25,7 @@ def cmd_info(repl: Repl, rest: str) -> None:
 @command("/findings", alias="/f", group="Diagnostics",
          summary="List conformance findings so far", usage="/findings [clear]", words=("clear",))
 def cmd_findings(repl: Repl, rest: str) -> None:
-    from ..repl import print_findings
+    from ..diagnostics import print_findings
 
     if rest.strip() == "clear":
         repl.session.findings.clear()

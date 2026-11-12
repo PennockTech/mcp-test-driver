@@ -117,6 +117,24 @@ remote (HTTPS).  A malicious server may attempt:
   JSON, a warning is emitted to stderr instead of silently ignoring.
 - **Byte limit**: Total SSE stream bytes are capped at `MAX_RESPONSE_BYTES`.
 
+### Fetched Documents (fetch.py, auth_diag.py, legacy SSE)
+
+Some URLs come from the server: OAuth metadata locations, the legacy
+HTTP+SSE `endpoint`, server cards.
+
+- **Metadata fetches** (`JsonFetcher`): GET only, no redirects, a 1 MiB
+  cap, HTTPS required except to loopback hosts, and no credentials sent.
+  A server can make the client fetch a public HTTPS URL of its choosing;
+  it cannot make it reach plain-HTTP internal services or follow a
+  redirect.
+- **Legacy SSE endpoint**: must be on the same origin (scheme, host, port)
+  as the SSE URL; otherwise the connection is refused, since our POSTs
+  (and any `Authorization` header) would follow it.
+- **Reader threads**: each SSE stream is read by a daemon thread that only
+  parses and queues; the main thread prints.  Any exception in a thread
+  whose stream was abandoned is ignored; otherwise it is reported as a
+  broken stream.
+
 ### Interactive Handlers (interactive.py)
 
 Elicitation and sampling are opt-in (`--elicitation`, `--sampling`): with
@@ -162,6 +180,4 @@ turned into a raw send.
 - **OAuth 2.1 authentication**: The spec defines full OAuth, but as a test
   driver we don't implement auth flows.
 - **DNS discovery**: only unofficial third-party drafts exist.
-- **.well-known metadata**: OAuth protected-resource metadata is not yet
-  fetched (planned: on a 401/403, with SSRF limits).
-- **MCP Server Cards / AI Catalog**: not fetched (planned, on demand only).
+- **Server Cards / AI Catalog**: fetched only on request (`/server-card`).
