@@ -191,3 +191,35 @@ def check_session(session: McpSession, lists: dict[str, list[dict[str, Any]]]) -
             "basic",
             level=Level.WARNING,
         )
+
+
+def check_tool_result(log: DiagnosticLog, spec: SpecVersion, tool: dict[str, Any], result: Any) -> None:
+    """Structured output (2025-06-18+): a tool with an outputSchema MUST return
+    structuredContent conforming to it.  Validation uses the optional
+    `jsonschema` package when it is installed."""
+    if not isinstance(result, dict) or result.get("isError"):
+        return
+    schema = tool.get("outputSchema")
+    name = sanitize_any(tool.get("name", "?"))
+    if not isinstance(schema, dict):
+        return
+    if "structuredContent" not in result:
+        log.violation("missing-structured-content",
+                      f"tool {name!r} has an outputSchema but returned no structuredContent",
+                      "server/tools#output-schema")
+        return
+    try:
+        import jsonschema  # ty: ignore[unresolved-import]
+    except ImportError:
+        log.note("structured-content-unvalidated",
+                 "install the jsonschema package to validate structuredContent against outputSchema")
+        return
+    try:
+        jsonschema.validate(result["structuredContent"], schema)
+    except jsonschema.ValidationError as e:
+        log.violation("structured-content-invalid",
+                      f"tool {name!r} structuredContent does not match its outputSchema: {sanitize_any(e.message)}",
+                      "server/tools#output-schema")
+    except jsonschema.SchemaError as e:
+        log.violation("output-schema-invalid", f"tool {name!r} outputSchema is not valid: {sanitize_any(e.message)}",
+                      "server/tools#output-schema")

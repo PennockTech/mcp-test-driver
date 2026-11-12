@@ -106,4 +106,4 @@ def by_group() -> list[tuple[str, list[Command]]]:
 
 
 # Register the command modules.  Imported last: they use `command` above.
-from . import client, core, diag, protocol_cmds, server, streams, web  # noqa: E402, F401
+from . import client, core, diag, ext, protocol_cmds, server, streams, web  # noqa: E402, F401

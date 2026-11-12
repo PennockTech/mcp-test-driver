@@ -130,6 +130,10 @@ class Repl:
         self.trace_enabled = session.transport.trace
         self.last_response: dict[str, Any] | None = None
         self.last_probe: list[Any] = []
+        # Tool calls returning a task handle are followed to the result.
+        self.follow_tasks = True
+        # skills/list entries by URI, for digest checks.
+        self.skills: dict[str, dict[str, Any]] = {}
         # Commands that failed (transport or JSON-RPC errors), for --exec.
         self.failures = 0
         session.notification_listeners.append(self._on_notification)
@@ -232,6 +236,18 @@ class Repl:
             self.failures += 1
         render_response(resp)
 
+    def show_call(self, resp: dict[str, Any], tool: dict[str, Any] | None = None) -> None:
+        """Show a tools/call response, following it if it is a task."""
+        from .checks import check_tool_result
+        from .tasks import follow, task_in
+
+        handle = task_in(resp.get("result"))
+        if handle is not None and self.follow_tasks:
+            resp = follow(self.session, handle)
+        self.show(resp)
+        if tool is not None:
+            check_tool_result(self.session.findings, self.session.spec, tool, resp.get("result"))
+
     def refresh_readline(self) -> None:
         setup_readline(self.cache.completion)
 
@@ -249,4 +265,4 @@ class Repl:
         if self.session.transport.kind == "http" and self.session.spec.has(Feature.METHOD_HEADERS):
             headers = param_headers(state.tool_schemas.get(name, {}), arguments) or None
         resp = self.session.call_tool(state.real_tool_name(name), arguments, headers=headers)
-        self.show(resp)
+        self.show_call(resp, tool=state.tool_defs.get(name))

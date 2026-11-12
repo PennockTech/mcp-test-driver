@@ -1,8 +1,56 @@
-<!-- Approved plan for multi-version MCP support.  Phase 0 (this doc, the
-     feature matrix and the vendored specs) and Step A (the Pages CIMD site)
-     are done; later phases land as commits on the feature branch. -->
+<!-- The approved plan for multi-version MCP support, kept for the record.
+     See "Status" for what was built and where it differs. -->
 
 # Roadmap: make mcp-test-driver a multi-version MCP diagnostic driver
+
+## Status (2026-11-12): all phases implemented
+
+| Phase | Commit(s) on the feature branch |
+|---|---|
+| 0 Specs, feature matrix, this roadmap | `4d2aa62` |
+| Step A GitHub Pages CIMD document | `e8aa191` |
+| 1–2 Core rebuild, negotiation, diagnostics | `033cdf7` |
+| 3 Elicitation, sampling, progress | `ed961fa` |
+| 4 2026-07-28 stateless protocol, dual-era negotiation | `a813414` |
+| 5 HTTP+SSE fallback, OAuth discovery, server cards, `--otel` | `99900d8` |
+| 6 OAuth login | `6671a5a` |
+| 7 Probing, `--check`, conformance client | `ab3f745` |
+| 8 Tasks, MCP Apps, skills, extensions, docs | this commit |
+
+Verification: about 510 unit/end-to-end tests against scenario-driven fake
+servers; opt-in integration tests against the official Python SDK (both
+eras, stdio and HTTP) and the TypeScript "everything" server; and every
+client scenario in the official conformance suite's 2025-11-25 and
+2026-07-28 requirement lists (50/50).
+
+Where the build differs from the plan below:
+
+- `--era auto` is the default, as planned; the Streamable HTTP GET stream
+  is also opened right after `initialize` (as SDK clients do), because the
+  conformance suite showed servers sending requests there.
+- SSE resumption and the GET stream landed with Phase 4, alongside the
+  per-stream reader threads they needed.
+- The `validate` extra was not added (it would rewrite `uv.lock`, and CI
+  pins an older uv); `structuredContent` is validated when `jsonschema` is
+  importable, and its absence is noted.
+- `-c/--exec`, `--elicitation-auto` and `--conformance-client` were added
+  to make scripted runs and the official client suite possible.
+- OAuth refuses to continue on an `iss` mismatch, a mismatched AS
+  metadata issuer, or protected-resource metadata naming a different
+  resource; everything else is a finding.
+
+Not done / future work:
+
+- OAuth extensions beyond client credentials: enterprise-managed
+  authorization (SEP-990), DPoP, `private_key_jwt`, WIF jwt-bearer.
+- The CIMD document goes live once `site/` is on `main` and Pages is set
+  to "GitHub Actions".
+- Skills: `resources/directory/read` is not wrapped (use `/send`).
+- `sampling.tools` / `sampling.context` capabilities are not declared
+  (a `!json` reply can still carry `tool_use`).
+- Automated comparison with the conformance suite's *server* leg (done by
+  hand: verdicts agree where scenarios overlap).
+
 
 ## Context
 

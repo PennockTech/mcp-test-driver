@@ -169,6 +169,17 @@ with "method not supported".
 - Tab-completion is switched off while answering, so server-controlled
   names cannot be completed into an answer by accident.
 
+### Extensions (tasks.py, commands/ext.py)
+
+- **Tasks**: input a task asks for (`inputRequests`) goes through the same
+  handlers, and the same opt-in, as direct elicitation and sampling; keys
+  already answered are not presented again.
+- **MCP Apps**: UI resources are HTML from the server.  They are never
+  rendered; `/app save` writes them only to a file the user names, with a
+  reminder to open it in a sandboxed browser profile.
+- **Skills**: `/skills read` checks a file against the digest from
+  `skills/list` and records a violation on mismatch.
+
 ### Raw Protocol Commands (commands/protocol_cmds.py)
 
 `/send`, `/notify` and `/raw` deliberately send whatever the user types,

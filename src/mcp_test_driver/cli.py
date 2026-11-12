@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 from pathlib import Path
@@ -79,6 +80,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="answer sampling requests yourself (you play the LLM)")
     g.add_argument("--progress", action="store_true",
                    help="attach progress tokens to calls")
+    g.add_argument("--extension", action="append", default=[], metavar="ID[=JSON]",
+                   help="declare a client extension, e.g. io.modelcontextprotocol/tasks (repeatable)")
     g.add_argument("--otel", action="store_true",
                    help="send a fresh OpenTelemetry traceparent in each request's _meta (SEP-414)")
 
@@ -257,6 +260,13 @@ def run_session(transport: Transport, args: argparse.Namespace, holder: list[Tra
             print(f"Error: {e}", file=sys.stderr)
             sys.exit(1)
     session.otel = args.otel
+    for spec in args.extension:
+        ext_id, _, settings = spec.partition("=")
+        try:
+            session.extensions[ext_id] = json.loads(settings) if settings else {}
+        except json.JSONDecodeError as e:
+            print(f"Error: --extension {ext_id}: settings are not JSON: {e}", file=sys.stderr)
+            sys.exit(1)
     try:
         try:
             connect(session, ConnectOptions(era=args.era, version=args.protocol_version,

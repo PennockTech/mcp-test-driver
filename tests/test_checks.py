@@ -130,3 +130,27 @@ def test_preshown_findings_not_repeated() -> None:
     log.note("b", "new")
     assert [f.code for f in log.take_unshown()] == ["b"]
     assert len(log) == 2
+
+
+class TestToolResults:
+    TOOL = {"name": "t", "outputSchema": {"type": "object", "properties": {"n": {"type": "integer"}}, "required": ["n"]}}
+
+    def test_missing_structured_content(self) -> None:
+        log = DiagnosticLog()
+        checks.check_tool_result(log, versions.V2025_06_18, self.TOOL, {"content": []})
+        assert "missing-structured-content" in _codes(log)
+
+    def test_error_results_exempt(self) -> None:
+        log = DiagnosticLog()
+        checks.check_tool_result(log, versions.V2025_06_18, self.TOOL, {"content": [], "isError": True})
+        assert not log.items
+
+    def test_validation_or_note(self) -> None:
+        log = DiagnosticLog()
+        checks.check_tool_result(log, versions.V2025_06_18, self.TOOL, {"content": [], "structuredContent": {"n": "x"}})
+        try:
+            import jsonschema  # noqa: F401
+        except ImportError:
+            assert "structured-content-unvalidated" in _codes(log)
+        else:
+            assert "structured-content-invalid" in _codes(log)

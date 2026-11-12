@@ -107,11 +107,11 @@ client to server, S→C is server to client.
 | `sampling/createMessage` | S→C | ✓ | ✓ | ✓ | ✓ | ✓ in MRTR (D) | ✓ human-in-the-loop (`--sampling`) |
 | `elicitation/create` | S→C | — | — | **new** | ✓ | ✓ in MRTR | ✓ interactive (`--elicitation`) |
 | `notifications/elicitation/complete` | S→C | — | — | — | **new** | ✗ | ✓ displayed |
-| `tasks/get` | both | — | — | — | **new** | moved to extension | — |
-| `tasks/result` | both | — | — | — | **new** | ✗ | — |
-| `tasks/list` | both | — | — | — | **new** | ✗ | — |
-| `tasks/cancel` | both | — | — | — | **new** | moved to extension | — |
-| `notifications/tasks/status` | both | — | — | — | **new** | moved to extension | — |
+| `tasks/get` | both | — | — | — | **new** | moved to extension | ✓ `/tasks get`, polling |
+| `tasks/result` | both | — | — | — | **new** | ✗ | ✓ `/tasks result`, after polling |
+| `tasks/list` | both | — | — | — | **new** | ✗ | ✓ `/tasks list` |
+| `tasks/cancel` | both | — | — | — | **new** | moved to extension | ✓ `/tasks cancel` |
+| `notifications/tasks/status` | both | — | — | — | **new** | moved to extension | ✓ displayed |
 
 "In MRTR" means that in 2026-07-28 these request shapes still exist, but
 the server no longer sends them as JSON-RPC requests.  Instead it embeds
@@ -139,7 +139,7 @@ return unsolicited task handles.
 | `Implementation.title` | — | — | **new** | ✓ | ✓ | ✓ shown |
 | `Implementation.icons`, `description`, `websiteUrl` | — | — | — | **new** | ✓ | ✓ shown |
 | `instructions` | ✓ | ✓ | ✓ | ✓ | in `DiscoverResult` | ✓ start-up report |
-| `capabilities.extensions` | — | — | — | — | **new** | ✓ shown in the report |
+| `capabilities.extensions` | — | — | — | — | **new** | ✓ shown; `--extension`, `/extension` |
 | `progressToken`; progress `message` | token | + `message` | ✓ | ✓ | ✓ | ✓ `/progress`, `--progress` |
 | `notifications/cancelled.requestId` | required | required | required | optional | ✓ | ✓ always sent |
 | Pagination (`cursor` / `nextCursor`) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ (100-page cap) |
@@ -183,7 +183,7 @@ return unsolicited task handles.
 | Tool name format (1–128 characters, `[A-Za-z0-9_.-]`, SEP-986) | — | — | — | **new** (SHOULD) | ✓ | ✓ checked; real names kept |
 | Input validation errors returned as tool errors (`isError`, SEP-1303) | — | — | — | **new** | ✓ | ✓ shown |
 | Tool / Resource / Prompt `icons` | — | — | — | **new** | ✓ | ✓ counted |
-| Tool `execution.taskSupport` | — | — | — | **new** | ✗ (extension) | ✓ `/describe` |
+| Tool `execution.taskSupport` | — | — | — | **new** | ✗ (extension) | ✓ `/describe`; `/task` calls |
 | Default JSON Schema dialect 2020-12 (SEP-1613) | — | — | — | **new** | ✓ | n/a |
 | `x-mcp-header` tool params mapped to HTTP headers (SEP-2243) | — | — | — | — | **new** | ✓ sent; invalid annotations flagged (tool kept) |
 | Deterministic `tools/list` order | — | — | — | — | **new** (SHOULD) | n/a |
@@ -244,14 +244,14 @@ return unsolicited task handles.
 
 ## Extensions and discovery outside the dated core
 
-| Item | Status | Notes |
+| Item | Status | Notes / driver support |
 |---|---|---|
-| Extensions mechanism (SEP-2133, SEP-3392) | Final | `capabilities.extensions["vendor/name"]`; off by default in SDKs |
-| Tasks extension `io.modelcontextprotocol/tasks` (SEP-2663) | Final | Replaces the 2025-11-25 core tasks |
-| MCP Apps `io.modelcontextprotocol/ui` (SEP-1865) | Final | `text/html;profile=mcp-app` resources referenced from tool `_meta` |
-| Skills extension (SEP-2640) | Final | |
-| OAuth client credentials (SEP-1046, ext-auth) | Final | Also in ext-auth: enterprise-managed authorization (SEP-990), DPoP, WIF |
-| Server Cards (SEP-2127) | Final | `<mcp-url>/server-card`; AI Catalog at `/.well-known/ai-catalog.json`. **No official `/.well-known/mcp`.** |
+| Extensions mechanism (SEP-2133, SEP-3392) | Final | `capabilities.extensions["vendor/name"]`; off by default.  Driver: `--extension`, `/extension`, listed in the report |
+| Tasks extension `io.modelcontextprotocol/tasks` (SEP-2663) | Final | Replaces the 2025-11-25 core tasks.  Driver: `/task`, task handles followed, `tasks/update` with input |
+| MCP Apps `io.modelcontextprotocol/ui` (SEP-1865) | Final | `text/html;profile=mcp-app` resources referenced from tool `_meta.ui.resourceUri`.  Driver: `/app` lists and saves (never renders) |
+| Skills extension (SEP-2640) | Final | `skills/list`, `skills/get`, `skill://` resources with digests.  Driver: `/skills`, digest-checked reads |
+| OAuth client credentials (SEP-1046, ext-auth) | Final | Driver: `--auth-flow client-credentials`.  Also in ext-auth (not implemented): enterprise-managed authorization (SEP-990), DPoP, WIF |
+| Server Cards (SEP-2127) | Final | `<mcp-url>/server-card`; AI Catalog at `/.well-known/ai-catalog.json`. **No official `/.well-known/mcp`.**  Driver: `/server-card`, compared with the live server |
 
 ## Conformance suite
 

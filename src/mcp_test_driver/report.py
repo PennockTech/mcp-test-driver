@@ -100,6 +100,11 @@ def print_report(
     for key, status, note in capability_rows(state.capabilities, spec):
         mark = green(status) if status == "yes" else dim(status)
         print(f"  {key:<13} {mark:<4} {dim(note)}")
+    extensions = state.capabilities.get("extensions")
+    if isinstance(extensions, dict) and extensions:
+        print(bold("Server extensions"))
+        for ext_id, settings in extensions.items():
+            print(f"  {sanitize_any(ext_id)}  {dim(safe_json(settings, indent=None))}")
     client_caps = state.client_capabilities or session.client_capabilities()
     print(bold("Client capabilities sent"))
     print(f"  {dim(safe_json(client_caps, indent=None)) if client_caps else dim('(none)')}")
