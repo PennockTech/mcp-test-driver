@@ -150,6 +150,8 @@ class McpSession:
         self.progress = False
         self.otel = False
         self.extensions: dict[str, JsonObject] = {}
+        # The challenge from the last 401/403, for OAuth discovery.
+        self.last_www_authenticate: str | None = None
         # Methods of server-to-client requests we have answered.
         self.server_requests_seen: list[str] = []
         # How to (re)establish the protocol; set by negotiate.connect.

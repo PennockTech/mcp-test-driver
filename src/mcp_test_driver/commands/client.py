@@ -102,3 +102,20 @@ def cmd_progress(repl: Repl, rest: str) -> None:
         print(red("Usage: /progress on|off"))
         return
     print(dim(f"Progress tokens {'on' if repl.session.progress else 'off'}."))
+
+
+@command(
+    "/otel",
+    group="Client",
+    summary="Send an OpenTelemetry traceparent with each request (printed, for correlation)",
+    usage="/otel on|off",
+    words=("on", "off"),
+)
+def cmd_otel(repl: Repl, rest: str) -> None:
+    word = rest.strip()
+    if word in ("on", "off"):
+        repl.session.otel = word == "on"
+    elif word:
+        print(red("Usage: /otel on|off"))
+        return
+    print(dim(f"traceparent {'on' if repl.session.otel else 'off'}."))

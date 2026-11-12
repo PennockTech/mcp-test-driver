@@ -13,7 +13,8 @@ from typing import TYPE_CHECKING
 from . import versions
 
 if TYPE_CHECKING:
-    from .transport import Transport
+    from .protocol import McpSession
+    from .transport import AuthRequiredError, Transport
 
 DESCRIPTION = """\
 Interactive REPL and diagnostic driver for MCP servers.
@@ -75,10 +76,13 @@ def build_parser() -> argparse.ArgumentParser:
                    help="answer sampling requests yourself (you play the LLM)")
     g.add_argument("--progress", action="store_true",
                    help="attach progress tokens to calls")
+    g.add_argument("--otel", action="store_true",
+                   help="send a fresh OpenTelemetry traceparent in each request's _meta (SEP-414)")
 
     g = p.add_argument_group("transport")
-    g.add_argument("--transport", choices=("auto", "stdio", "http"), default="auto",
-                   help="force a transport instead of guessing from the target")
+    g.add_argument("--transport", choices=("auto", "stdio", "http", "sse"), default="auto",
+                   help="force a transport: stdio, http (Streamable HTTP), or sse (the deprecated "
+                   "2024-11-05 HTTP+SSE); auto falls back from http to sse when needed")
     g.add_argument("--header", action="append", default=[], metavar="'NAME: VALUE'",
                    help="extra HTTP header (repeatable)")
     g.add_argument("--bearer-env", metavar="VAR",
@@ -140,23 +144,26 @@ def main(argv: list[str] | None = None) -> None:
     except Exception as e:  # TransportError, urllib3 setup errors
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
+    holder: list[Transport] = [transport]
     try:
-        run_session(transport, args)
+        run_session(transport, args, holder)
     except KeyboardInterrupt:
         print()
         sys.exit(130)
     finally:
-        transport.close()
+        for t in holder:
+            t.close()
 
 
 def make_transport(args: argparse.Namespace) -> Transport:
     from .transport import DEFAULT_TIMEOUT, HttpTransport, StdioTransport
+    from .transport.legacy_sse import LegacySseTransport
 
     target: list[str] = args.target
     timeout = args.timeout or DEFAULT_TIMEOUT
     is_url = target[0].startswith(("http://", "https://"))
     kind = args.transport if args.transport != "auto" else ("http" if is_url else "stdio")
-    if kind == "http":
+    if kind in ("http", "sse"):
         if len(target) > 1:
             raise ValueError("an HTTP target takes no further arguments")
         headers = parse_headers(args.header)
@@ -165,9 +172,8 @@ def make_transport(args: argparse.Namespace) -> Transport:
             if not token:
                 raise ValueError(f"environment variable {args.bearer_env} is empty or unset")
             headers["Authorization"] = f"Bearer {token}"
-        transport: Transport = HttpTransport(
-            target[0], verify_tls=not args.insecure, timeout=timeout, extra_headers=headers
-        )
+        cls = LegacySseTransport if kind == "sse" else HttpTransport
+        transport: Transport = cls(target[0], verify_tls=not args.insecure, timeout=timeout, extra_headers=headers)
     else:
         if args.header or args.bearer_env:
             print("Note: --header/--bearer-env have no effect on stdio; pass credentials "
@@ -177,11 +183,12 @@ def make_transport(args: argparse.Namespace) -> Transport:
     return transport
 
 
-def run_session(transport: Transport, args: argparse.Namespace) -> None:
+def run_session(transport: Transport, args: argparse.Namespace, holder: list[Transport] | None = None) -> None:
     from .negotiate import ConnectOptions, connect
     from .protocol import McpError, McpSession
-    from .repl import Repl, print_findings
-    from .transport import TransportError
+    from .diagnostics import print_findings
+    from .repl import Repl
+    from .transport import AuthRequiredError, TransportError
 
     session = McpSession(transport)
     if args.roots is not None:
@@ -204,9 +211,19 @@ def run_session(transport: Transport, args: argparse.Namespace) -> None:
         if args.sampling:
             session.enable_sampling(prompter)
     session.progress = args.progress
+    session.otel = args.otel
     try:
-        connect(session, ConnectOptions(era=args.era, version=args.protocol_version,
-                                    probe_timeout=args.probe_timeout))
+        try:
+            connect(session, ConnectOptions(era=args.era, version=args.protocol_version,
+                                        probe_timeout=args.probe_timeout))
+        finally:
+            if holder is not None and session.transport is not transport:
+                holder.append(session.transport)
+    except AuthRequiredError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        session.last_www_authenticate = e.www_authenticate or None
+        report_auth(session, e)
+        sys.exit(1)
     except TransportError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
@@ -216,7 +233,7 @@ def run_session(transport: Transport, args: argparse.Namespace) -> None:
     except ConnectionError as e:
         print(f"Connection error: {e}", file=sys.stderr)
         sys.exit(1)
-    repl = Repl(session)
+    repl = Repl(session, verify_tls=not args.insecure)
     if not args.quiet:
         from .report import print_report
 
@@ -224,3 +241,22 @@ def run_session(transport: Transport, args: argparse.Namespace) -> None:
     else:
         print_findings(session.findings.take_unshown())
     repl.run()
+
+
+def report_auth(session: McpSession, err: AuthRequiredError) -> None:
+    """On 401/403 at start-up, show the OAuth discovery chain."""
+    from .auth_diag import describe, discover
+    from .fetch import JsonFetcher
+    from .diagnostics import print_findings
+
+    url = getattr(session.transport, "url", None)
+    if not url:
+        return
+    print("The server requires authorization.  Discovery:", file=sys.stderr)
+    disc = discover(url, err.www_authenticate or None, session.findings,
+                    JsonFetcher(verify_tls=getattr(session.transport, "verify_tls", True)),
+                    protocol_version=session.state.version)
+    for line in describe(disc):
+        print(f"  {line}", file=sys.stderr)
+    print_findings(session.findings.take_unshown())
+    print("Use --bearer-env VAR (or --header) to supply a token.", file=sys.stderr)

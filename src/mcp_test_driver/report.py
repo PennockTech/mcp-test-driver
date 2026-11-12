@@ -54,7 +54,7 @@ def capability_rows(caps: dict[str, Any], spec: versions.SpecVersion) -> list[tu
 def print_report(
     session: McpSession, cache: SessionCache | None = None, *, all_findings: bool = False
 ) -> None:
-    from .repl import print_findings
+    from .diagnostics import print_findings
 
     state = session.state
     spec = session.spec

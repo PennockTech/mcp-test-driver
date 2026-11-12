@@ -70,17 +70,53 @@ def connect(session: McpSession, options: ConnectOptions | None = None) -> None:
     """Establish the protocol over an already-open transport."""
     opts = options or ConnectOptions()
     session.connect_options = opts
-    if opts.era == "legacy":
+    if opts.era != "legacy" and session.transport.kind != "sse":
+        probe = probe_modern(session, opts)
+        if probe.modern:
+            return
+        if opts.era == "modern":
+            raise ModernRejected(f"server did not accept the stateless protocol ({probe.reason})")
+        session.state.how_chosen.append(f"falling back to initialize: {probe.reason}")
+        session.reset_to_handshake()
+    _initialize(session, opts)
+
+
+def _initialize(session: McpSession, opts: ConnectOptions) -> None:
+    """initialize, falling back from Streamable HTTP to HTTP+SSE as 2025-03-26 describes."""
+    try:
         session.initialize(_legacy_version(opts))
-        return
-    probe = probe_modern(session, opts)
-    if probe.modern:
-        return
-    if opts.era == "modern":
-        raise ModernRejected(f"server did not accept the stateless protocol ({probe.reason})")
-    session.state.how_chosen.append(f"falling back to initialize: {probe.reason}")
-    session.reset_to_handshake()
-    session.initialize(_legacy_version(opts))
+    except HttpStatusError as e:
+        if session.transport.kind != "http" or e.status not in (400, 404, 405) or e.messages:
+            raise
+        session.state.how_chosen.append(
+            f"initialize over Streamable HTTP got HTTP {e.status}; trying the 2024-11-05 HTTP+SSE transport"
+        )
+        switch_to_legacy_sse(session)
+        session.initialize(_legacy_version(opts))
+    if session.transport.kind == "sse":
+        session.findings.deprecated(
+            "legacy-sse-transport",
+            "server uses the HTTP+SSE transport, deprecated since 2025-03-26",
+            "basic/transports#backwards-compatibility",
+        )
+
+
+def switch_to_legacy_sse(session: McpSession) -> None:
+    from .transport.legacy_sse import LegacySseTransport
+
+    old = session.transport
+    url = getattr(old, "url")
+    new = LegacySseTransport(
+        url,
+        verify_tls=getattr(old, "verify_tls", True),
+        timeout=getattr(old, "timeout", 120.0),
+        extra_headers=old.wire.extra_headers,
+    )
+    new.trace = old.trace
+    new.authorization = getattr(old, "authorization", None)
+    old.close()
+    session.transport = new
+    session.state.how_chosen.append(f"HTTP+SSE endpoint: {sanitize(new.endpoint or '?')}")
 
 
 def reconnect(session: McpSession) -> None:

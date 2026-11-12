@@ -10,6 +10,12 @@ Extra scenario keys:
                      response; GET with Last-Event-ID continues it
     sse_retry_ms     send this SSE retry field before closing a dropped stream
     get_events       accept GET: send these messages, then keep the stream open
+    legacy_sse       act as a 2024-11-05 HTTP+SSE server: GET /mcp streams, the
+                     first event names the POST endpoint; POST /mcp gives 405
+    endpoint         the endpoint event's data (default "/messages?sid=1")
+    require_bearer   reject requests without "Authorization: Bearer <this>" (401)
+    www_authenticate the WWW-Authenticate header sent with that 401
+    documents        {path: json} served on GET (metadata, server cards)
 """
 
 from __future__ import annotations
@@ -36,6 +42,7 @@ class FakeHttpServer:
         self.event_counts: dict[str, int] = {}
         self.streams_opened = 0
         self.stopping = threading.Event()
+        self.legacy_out: queue.Queue[Any] = queue.Queue()
         handler = _make_handler(self)
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
         self.httpd.daemon_threads = True
@@ -126,9 +133,67 @@ def _make_handler(server: FakeHttpServer) -> type[BaseHTTPRequestHandler]:
                     if server.cancelled.setdefault(arg, threading.Event()).wait(timeout=30):
                         self._event(server.mcp.listen_closed(arg), key)
 
+        def _unauthorized(self) -> bool:
+            token = s.get("require_bearer")
+            if token and self.headers.get("Authorization") != f"Bearer {token}":
+                headers = {"WWW-Authenticate": s["www_authenticate"]} if s.get("www_authenticate") else {}
+                self._send(401, b'{"error":"unauthorized"}', headers=headers)
+                return True
+            return False
+
+        def _legacy_stream(self) -> None:
+            self._sse_start()
+            endpoint = s.get("endpoint", "/messages?sid=1")
+            self.wfile.write(f"event: endpoint\ndata: {endpoint}\n\n".encode())
+            self.wfile.flush()
+            while not server.stopping.is_set():
+                try:
+                    msg = server.legacy_out.get(timeout=0.2)
+                except queue.Empty:
+                    continue
+                try:
+                    self.wfile.write(f"event: message\ndata: {json.dumps(msg)}\n\n".encode())
+                    self.wfile.flush()
+                except OSError:
+                    break
+            self.close_connection = True
+
+        def _legacy_post(self, msg: Any) -> None:
+            def work() -> None:
+                gen = server.mcp.handle(msg)
+                to_send = None
+                while True:
+                    try:
+                        action, arg = gen.send(to_send)
+                    except StopIteration:
+                        return
+                    to_send = None
+                    if action == "send":
+                        server.legacy_out.put(arg)
+                    elif action == "await":
+                        to_send = server.responses.get(timeout=10)
+
+            if isinstance(msg, dict) and "method" not in msg:
+                server.responses.put(msg)
+            else:
+                threading.Thread(target=work, daemon=True).start()
+            self._send(202, b"Accepted", ctype="text/plain")
+
         def do_GET(self) -> None:  # noqa: N802
             with server.lock:
                 server.requests.append(("GET", self.path, dict(self.headers), None))
+            path = self.path.split("?", 1)[0]
+            if path in s.get("documents", {}):
+                self._send(200, json.dumps(s["documents"][path]).encode())
+                return
+            if path != "/mcp":
+                self._send(404)
+                return
+            if self._unauthorized():
+                return
+            if s.get("legacy_sse"):
+                self._legacy_stream()
+                return
             last = self.headers.get("Last-Event-ID")
             if last:
                 key = last.rsplit("-", 1)[0]
@@ -165,6 +230,16 @@ def _make_handler(server: FakeHttpServer) -> type[BaseHTTPRequestHandler]:
             with server.lock:
                 server.requests.append(("POST", self.path, dict(self.headers), msg))
             method = msg.get("method") if isinstance(msg, dict) else None
+            if self._unauthorized():
+                return
+            if s.get("legacy_sse"):
+                if self.path.split("?", 1)[0] == "/mcp":
+                    self._send(405)
+                else:
+                    if isinstance(msg, dict) and "method" not in msg:
+                        server.mcp.log(msg)
+                    self._legacy_post(msg)
+                return
 
             canned = s.get("status_for", {}).get(method)
             if canned:

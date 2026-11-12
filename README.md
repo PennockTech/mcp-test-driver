@@ -70,7 +70,8 @@ mcp> unicode_lookup_char char=✓
 | `--elicitation[=MODES]`  | Answer elicitation requests interactively (`form`, `url`)       |
 | `--sampling`             | Answer sampling requests yourself (you play the LLM)            |
 | `--progress`             | Attach progress tokens to calls                                 |
-| `--transport KIND`       | Force `stdio` or `http` instead of guessing from the target     |
+| `--otel`                 | Send a fresh OpenTelemetry `traceparent` with each request      |
+| `--transport KIND`       | Force `stdio`, `http` (Streamable HTTP) or `sse` (2024-11-05 HTTP+SSE) |
 | `--header 'NAME: VALUE'` | Extra HTTP header (repeatable)                                  |
 | `--bearer-env VAR`       | Send `Authorization: Bearer $VAR`                               |
 | `--insecure`             | Skip TLS certificate verification (testing only)                |
@@ -135,6 +136,7 @@ Lists the server does not advertise are fetched on demand, with a note.
 | `/elicitation on [form,url] \| off`  | Answer elicitation requests interactively           |
 | `/sampling on \| off`                | Answer sampling requests yourself                   |
 | `/progress on \| off`                | Attach progress tokens to calls                     |
+| `/otel on \| off`                    | Send (and print) a `traceparent` with each request  |
 
 Capability changes reach handshake-era servers after `/reconnect`.
 
@@ -155,6 +157,8 @@ Capability changes reach handshake-era servers after `/reconnect`.
 | `/info`           | `/i`  | Connection report: protocol, server, capabilities, findings |
 | `/findings`       | `/f`  | Conformance findings so far (`/findings clear`)          |
 | `/last`           |       | The last response as raw JSON                            |
+| `/server-card [url]` |     | Fetch the Server Card and AI Catalog; compare with the live server |
+| `/auth discover`  |       | OAuth discovery chain and checks for this server         |
 | `/reconnect`      | `/rc` | Reconnect and re-negotiate                               |
 | `/cache-flush`    | `/cf` | Re-fetch tools, resources and prompts                    |
 | `/trace [on\|off]` | `/t`  | Toggle JSON-RPC protocol tracing                         |
@@ -219,13 +223,37 @@ assistant's reply, `!json {...}` for a complete result (e.g. a `tool_use`
 block), or `!decline`.  Handy for exercising agentic servers without
 wiring up a model.
 
+## HTTP transports
+
+- **Streamable HTTP** (2025-03-26+): JSON or SSE replies, every SSE event
+  routed (notifications and server requests mid-call included), sessions,
+  the GET listening stream (`/listen`), and `Last-Event-ID` resumption
+  honouring the server's `retry`.
+- **HTTP+SSE** (2024-11-05, deprecated): used automatically when
+  `initialize` over Streamable HTTP gets a 400/404/405, as the spec's
+  backwards-compatibility section describes, or forced with
+  `--transport sse`.  The POST endpoint must be on the same origin as the
+  SSE URL.
+
+## Authorization
+
+Static credentials: `--bearer-env VAR` (the token stays out of argv) or
+`--header`.  When a server answers 401/403, the driver shows the OAuth
+discovery chain it would follow: the `WWW-Authenticate` challenge,
+Protected Resource Metadata (RFC 9728, from the header or the well-known
+URIs), and authorization-server metadata (RFC 8414 / OpenID Connect, in
+the spec's order), with findings for anything missing or inconsistent
+(no PKCE S256, issuer or resource mismatch, ...).  `/auth discover` runs
+the same chain from the REPL.  Metadata fetches are GET-only, never follow
+redirects, and require HTTPS except to loopback hosts.
+
 ## Known Limitations
 
 Work in progress is tracked in
 [docs/roadmap-multi-version.md](docs/roadmap-multi-version.md).
 
-- **Legacy HTTP+SSE transport** (2024-11-05): not yet supported.
-- **OAuth**: only static credentials (`--bearer-env`, `--header`).
+- **OAuth login**: discovery and diagnostics only so far; tokens must be
+  supplied (`--bearer-env`).
 
 ## Installation
 

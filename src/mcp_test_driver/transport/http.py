@@ -119,6 +119,7 @@ class HttpTransport:
         self.url = url
         self.trace = True
         self.timeout = timeout
+        self.verify_tls = verify_tls
         self.wire = WireProfile()
         for k, v in (extra_headers or {}).items():
             check_header(k, v)

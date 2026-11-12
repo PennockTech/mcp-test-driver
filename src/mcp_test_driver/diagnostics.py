@@ -13,6 +13,8 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from enum import IntEnum, StrEnum
 
+from .color import dim, red, yellow
+
 
 class Level(IntEnum):
     INFO = 0
@@ -101,3 +103,10 @@ class DiagnosticLog:
 
     def worst(self) -> Level | None:
         return max((f.level for f in self.items), default=None)
+
+
+def print_findings(findings: list[Finding]) -> None:
+    for f in findings:
+        colour = red if f.level >= Level.ERROR else yellow if f.level >= Level.WARNING else dim
+        ref = f"  ({f.spec_ref})" if f.spec_ref else ""
+        print(colour(f"  [{f.label()}] {f.message}{ref}"))
