@@ -15,7 +15,7 @@
 | 5 HTTP+SSE fallback, OAuth discovery, server cards, `--otel` | `99900d8` |
 | 6 OAuth login | `6671a5a` |
 | 7 Probing, `--check`, conformance client | `ab3f745` |
-| 8 Tasks, MCP Apps, skills, extensions, docs | this commit |
+| 8 Tasks, MCP Apps, skills, extensions, docs | `6d0ef23` |
 
 Verification: about 510 unit/end-to-end tests against scenario-driven fake
 servers; opt-in integration tests against the official Python SDK (both
