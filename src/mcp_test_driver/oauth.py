@@ -57,10 +57,11 @@ from .sanitize import sanitize, sanitize_any
 from .transport.base import TransportError
 
 # Our Client ID Metadata Document (CIMD), published from site/oauth/client.json
-# by .github/workflows/pages.yaml.  Changing this URL changes our client
+# by .github/workflows/pages.yaml to GitHub Pages under the project's custom
+# domain (the github.io address redirects there).  Changing this URL changes our client
 # identity at every authorization server, and older releases keep using the
 # old one, so treat it as stable; --client-metadata-url overrides it.
-CIMD_CLIENT_ID = "https://pennocktech.github.io/mcp-test-driver/oauth/client.json"
+CIMD_CLIENT_ID = "https://mcp-test-driver.pennock.tech/oauth/client.json"
 
 CALLBACK_PATH = "/callback"
 # A fixed port is listed in the CIMD for authorization servers that compare

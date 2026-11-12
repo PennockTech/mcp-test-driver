@@ -295,15 +295,15 @@ Existing modules that change:
 - Trace output and the report always redact `Authorization` and token values.
 - `/auth status|login|refresh|logout` commands.
 
-**CIMD hosting (decided: GitHub Pages from this repo):**
+**CIMD hosting (decided: GitHub Pages from this repo, on a custom domain):**
 
-- `client_id` is `https://pennocktech.github.io/mcp-test-driver/oauth/client.json`. It is a constant in `oauth.py`; `--client-metadata-url` overrides it.
+- `client_id` is `https://mcp-test-driver.pennock.tech/oauth/client.json`. It is a constant in `oauth.py`; `--client-metadata-url` overrides it.
 - **Ports:** the CIMD draft defers to RFC 9700 §4.1.3, which lets loopback redirects use any port. Some authorization servers still compare redirects exactly. To serve both kinds, `redirect_uris` lists:
   - `http://127.0.0.1/callback` and `http://[::1]/callback`, portless, for ASes that allow any loopback port
   - `http://127.0.0.1:33418/callback`, for ASes that compare exactly
 - The driver binds port 33418 first and falls back to an ephemeral port. `--callback-port` overrides this.
 - **Document fields:** `client_id`, `client_name`, `client_uri` (the repo), `redirect_uris`, `grant_types` (`authorization_code`, `refresh_token`), `response_types` (`code`), `token_endpoint_auth_method: "none"`, `application_type: "native"`. Per the draft, it carries no secret.
-- **Moving off github.io later is possible but costs something:** the `client_id` changes, and once a CNAME is set, github.io redirects to the custom domain. ASes that refuse redirects would then reject the old ID, which older released versions still use. So any custom domain should be settled before the first release that ships OAuth. `--client-metadata-url` is always available as an escape hatch.
+- **Custom domain settled before any OAuth release:** `mcp-test-driver.pennock.tech` points at GitHub Pages, and the github.io address redirects to it. No released version used the github.io ID. Moving again would change the `client_id`, and ASes that refuse redirects would reject the ID older releases send, so treat it as fixed. `--client-metadata-url` is always available as an escape hatch.
 
 ### Era and version negotiation (in `negotiate.py`, following the spec's dual-era rules)
 

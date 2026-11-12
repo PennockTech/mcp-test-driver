@@ -24,8 +24,8 @@ def test_client_id_matches_code_and_url_rules() -> None:
     assert parts.path not in ("", "/")
     assert not parts.username and not parts.fragment and not parts.query
     assert ".." not in parts.path.split("/")
-    # The client_id URL must serve this very file from the published site root.
-    assert parts.path.endswith("/oauth/client.json")
+    # The client_id URL must serve this very file; the site is at the domain root.
+    assert parts.path == "/oauth/client.json"
 
 
 def test_required_fields_present() -> None:
