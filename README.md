@@ -16,12 +16,35 @@ The guiding rule: the negotiated revision decides *defaults* and how
 findings are labelled; it never hides or blocks a feature.
 
 Supported MCP revisions: 2024-11-05, 2025-03-26, 2025-06-18, 2025-11-25,
-2026-07-28.  See [docs/mcp-feature-matrix.md](docs/mcp-feature-matrix.md)
+2026-07-28.  See [docs/mcp-feature-matrix.md](https://github.com/PennockTech/mcp-test-driver/blob/main/docs/mcp-feature-matrix.md)
 for what each one defines and what the driver supports, and
-[docs/roadmap-multi-version.md](docs/roadmap-multi-version.md) for planned
+[docs/roadmap-multi-version.md](https://github.com/PennockTech/mcp-test-driver/blob/main/docs/roadmap-multi-version.md) for planned
 work.
 
+## Installation
+
+mcp-test-driver is on [PyPI](https://pypi.org/project/mcp-test-driver/) and
+needs Python 3.12 or later.
+
+```sh
+# Run it without installing anything:
+uvx mcp-test-driver <server-command...>
+
+# Or install the command:
+uv tool install mcp-test-driver
+pipx install mcp-test-driver
+
+# Or add it to a project's dev dependencies, then `uv run mcp-test-driver`:
+uv add --dev mcp-test-driver
+```
+
+From a source checkout, `uv run mcp-test-driver <server-command...>` runs
+the working tree; see [Development](#development).
+
 ## Usage
+
+The examples assume the command is installed; otherwise put `uvx` in
+front of each.
 
 ```sh
 # Stdio transport — pass the server command and its arguments:
@@ -331,7 +354,7 @@ retries the request with the new token:
 2. Client registration, in the spec's priority order: a pre-registered
    `--client-id` (with `--client-secret-env` for confidential clients,
    `client_secret_basic` or `client_secret_post` as the AS supports), our
-   published [Client ID Metadata Document](site/oauth/client.json), or
+   published [Client ID Metadata Document](https://mcp-test-driver.pennock.tech/oauth/client.json), or
    Dynamic Client Registration.
 3. Authorization code with PKCE (S256) and a loopback redirect on
    `127.0.0.1` (port 33418 if free, else any; `--callback-port`).  The
@@ -361,21 +384,6 @@ except to loopback hosts.
 - OAuth extensions beyond client credentials (enterprise-managed
   authorization, DPoP, `private_key_jwt`, WIF) are not implemented;
   discovery shows what an authorization server offers.
-- Our Client ID Metadata Document is published from `main` via GitHub
-  Pages; until that is live, use `--client-id` or DCR.
-
-## Installation
-
-```sh
-# Install as a tool (recommended for CLI use):
-uv tool install .
-
-# Or install into a project:
-uv pip install .
-
-# Or run directly from the source tree:
-uv run mcp-test-driver <server-command...>
-```
 
 ## Development
 
@@ -394,9 +402,11 @@ suites check against real implementations:
   integration`) runs the driver against the official Python SDK and the
   TypeScript "everything" reference server; needs network, uv and Node.
 - `task conformance` runs the official conformance suite's client
-  scenarios against the driver.  The protocol
-revision registry is cross-checked against the vendored upstream schemas
-in `docs/specs/`; refresh them with `scripts/fetch-specs.sh`.
+  scenarios against the driver.
+
+The protocol revision registry is cross-checked against the vendored
+upstream schemas in `docs/specs/`; refresh them with
+`scripts/fetch-specs.sh`.
 
 ## AI Disclosure
 
@@ -407,4 +417,4 @@ expect?)
 
 ## License
 
-ISC — see [LICENSE](LICENSE).
+ISC — see [LICENSE](https://github.com/PennockTech/mcp-test-driver/blob/main/LICENSE).
