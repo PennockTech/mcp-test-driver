@@ -17,17 +17,30 @@ The package lives under `src/mcp_test_driver/` (src layout, built with
 ```
 src/mcp_test_driver/
   cli.py         # argparse entry point (mcp-test-driver console script)
-  repl.py        # the interactive loop, command dispatch, history
+  repl.py        # the interactive loop, list cache, finding display
+  commands/      # builtin /commands: registry (__init__) + one module per area
   completion.py  # readline tab-completion + help keybindings + ReadlineModule Protocol
-  protocol.py    # JSON-RPC framing and MCP method bindings
-  transport.py   # stdio + HTTP Streamable transport, response sanitization
-  handlers.py    # client-side handlers (e.g. roots/list)
-  parse.py       # command-line argument parsing for the REPL
+  helptext.py    # /help, per-command and per-tool help output
+  protocol.py    # McpSession: receive loop, request framing per revision, dispatch
+  negotiate.py   # choosing era (handshake vs stateless) and revision
+  versions.py    # registry of spec revisions: methods, capabilities, features
+  messages.py    # JSON-RPC message shapes and classification
+  transport/     # stdio, Streamable HTTP, SSE parsing; Transport Protocol
+  handlers.py    # client-side handlers for server requests (roots/list, ...)
+  checks.py      # passive conformance checks -> findings
+  diagnostics.py # Finding / DiagnosticLog
+  report.py      # start-up connection report (/info)
+  render.py      # rendering results and content blocks (sanitized)
+  sanitize.py    # sanitize() / safe_json() for all server-supplied text
+  oauth.py       # OAuth client (CIMD client_id constant so far)
+  parse.py       # key=value argument parsing for the REPL
   color.py       # ANSI color helpers
 tests/           # pytest suite, mirrors src/ module-for-module
+  fakes/         # scenario-driven fake MCP servers (stdio, HTTP, in-memory)
 docs/            # security model, MCP spec notes, feature matrix, roadmap
   specs/         # vendored upstream MCP schemas + conformance lists (do not edit)
 scripts/         # fetch-specs.sh refreshes docs/specs/
+site/            # GitHub Pages: OAuth client metadata document (CIMD)
 .github/workflows/  # CI (tox across Python 3.12/3.13/3.14)
 Taskfile.yml     # `task` runner shortcuts (lint, typecheck, test, check)
 ```
@@ -87,7 +100,7 @@ are commented out in CI for now but **must** still be run locally.
 - **No bare `object` returns** for things callers will index into.  If a
   function returns "some module-like thing", give it a structural type.
 - **Sanitize all server-supplied strings** before printing or feeding them
-  to readline.  Use `transport.sanitize` — see `docs/security-model.md`
+  to readline.  Use `sanitize.sanitize` / `sanitize.safe_json` — see `docs/security-model.md`
   for the threat model.  Tool names are additionally stripped of the
   builtin `/` prefix so a malicious server cannot shadow `/quit` etc.
 - **Tests live next to the module they cover** (`tests/test_<module>.py`).
