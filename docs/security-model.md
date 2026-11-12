@@ -117,6 +117,21 @@ remote (HTTPS).  A malicious server may attempt:
   JSON, a warning is emitted to stderr instead of silently ignoring.
 - **Byte limit**: Total SSE stream bytes are capped at `MAX_RESPONSE_BYTES`.
 
+### Interactive Handlers (interactive.py)
+
+Elicitation and sampling are opt-in (`--elicitation`, `--sampling`): with
+neither, the client declares no such capability and answers those requests
+with "method not supported".
+
+- Everything a server shows the user (message, field titles, descriptions,
+  enum labels, sampled conversation, URLs) is sanitized.
+- URL-mode elicitation never opens a browser.  The URL's host is shown
+  separately so a look-alike link is easier to spot.
+- Form mode cannot be told to hide input; per the spec, servers must not
+  ask for secrets in form mode, and the driver echoes what you type.
+- Tab-completion is switched off while answering, so server-controlled
+  names cannot be completed into an answer by accident.
+
 ### Raw Protocol Commands (commands/protocol_cmds.py)
 
 `/send`, `/notify` and `/raw` deliberately send whatever the user types,

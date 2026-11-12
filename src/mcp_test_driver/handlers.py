@@ -2,19 +2,20 @@
 
 """Client-side request handlers for MCP server-to-client requests.
 
-MCP is bidirectional: the server can send JSON-RPC requests to the client,
-not just the other way around.  This module provides a registry of handlers
-that the transport layer dispatches to when it receives a server-initiated
-request (a message with both "method" and "id" fields).
+MCP is bidirectional: the server can ask the client for things.  Up to
+2025-11-25 it sends JSON-RPC requests; from 2026-07-28 it embeds the same
+request shapes in an InputRequiredResult (multi round-trip requests).  The
+session dispatches both through this registry, so one handler serves both.
 
-Currently supported server-to-client methods:
+Server-to-client methods handled:
 
-  - ping              → empty response (keepalive)
-  - roots/list        → list of filesystem root URIs the server may access
+  - ping                    → empty response (keepalive)
+  - roots/list              → filesystem root URIs (RootsHandler)
+  - elicitation/create      → ask the user (interactive.ElicitationHandler)
+  - sampling/createMessage  → the user plays the LLM (interactive.SamplingHandler)
 
-Handlers are registered in a HandlerRegistry, which also derives the
-client capabilities dict sent during initialize.  The transport holds a
-reference to the registry and dispatches incoming server requests through it.
+The registry also derives the client capabilities we declare: each handler
+may name the capability it implies.
 
 Security notes (roots):
 
@@ -41,6 +42,16 @@ class ClientHandler(Protocol):
         ...
 
 
+class HandlerError(Exception):
+    """A handler's refusal, sent back as a JSON-RPC error with this code."""
+
+    def __init__(self, code: int, message: str, data: Any = None) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.data = data
+
+
 class PingHandler:
     """Responds to server ping requests with an empty result."""
 
@@ -60,6 +71,9 @@ class RootsHandler:
     Subsequent add_root() calls verify that the new path is a descendant
     of base_path using Path.relative_to().
     """
+
+    # listChanged: we send notifications/roots/list_changed when roots change.
+    capability = ("roots", {"listChanged": True})
 
     def __init__(self, base_path: Path) -> None:
         # Resolve to absolute canonical path.  strict=True ensures it
@@ -138,14 +152,14 @@ class HandlerRegistry:
         return handler.handle(params)
 
     def capabilities(self) -> dict[str, Any]:
-        """Build the client capabilities dict from registered handlers.
+        """Client capabilities implied by the registered handlers.
 
-        This dict is sent in the initialize request so the server knows
-        which server-to-client methods it can call.
+        A handler declares one by having a `capability` attribute of
+        (name, value); e.g. roots → ("roots", {"listChanged": True}).
         """
         caps: dict[str, Any] = {}
-        if "roots/list" in self._handlers:
-            # listChanged: True tells the server we will send
-            # notifications/roots/list_changed if roots change.
-            caps["roots"] = {"listChanged": True}
+        for handler in self._handlers.values():
+            cap = getattr(handler, "capability", None)
+            if cap is not None:
+                caps[cap[0]] = dict(cap[1])
         return caps

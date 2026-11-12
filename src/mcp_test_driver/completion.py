@@ -4,7 +4,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Collection
+from collections.abc import Callable, Collection, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Protocol, cast
 
@@ -288,6 +289,22 @@ def readline_info() -> tuple[str, str]:
         version = "unknown"
 
     return (name, version)
+
+
+@contextmanager
+def suspend_completion() -> Iterator[None]:
+    """Turn tab-completion off while the user answers a server's question."""
+    rl = _get_readline()
+    if rl is None:
+        yield
+        return
+    get = getattr(rl, "get_completer", None)
+    previous = get() if get else None
+    rl.set_completer(None)
+    try:
+        yield
+    finally:
+        rl.set_completer(previous)
 
 
 def schedule_restore_input(text: str) -> None:

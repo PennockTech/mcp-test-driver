@@ -24,7 +24,8 @@ from typing import Any
 from . import __version__, messages, versions
 from .color import cyan, dim, eprint, red, yellow
 from .diagnostics import DiagnosticLog, Level
-from .handlers import HandlerRegistry, PingHandler, RootsHandler
+from .handlers import HandlerError, HandlerRegistry, PingHandler, RootsHandler
+from .interactive import ElicitationHandler, Prompter, SamplingHandler
 from .messages import JsonObject, JsonValue, Kind, classify
 from .negotiate import ConnectOptions
 from .sanitize import safe_json, sanitize
@@ -371,6 +372,8 @@ class McpSession:
         if registry.has(method):
             try:
                 reply = messages.result(req_id, registry.dispatch(method, params))
+            except HandlerError as e:
+                reply = messages.error(req_id, e.code, e.message, e.data)
             except Exception as e:
                 reply = messages.error(req_id, -32603, sanitize(str(e)))
         else:
@@ -605,6 +608,15 @@ class McpSession:
     def disable_roots(self) -> None:
         self.handler_registry.unregister("roots/list")
 
+    def enable_elicitation(self, prompter: Prompter, modes: frozenset[str] = frozenset({"form"})) -> None:
+        self.handler_registry.register("elicitation/create", ElicitationHandler(prompter, modes))
+
+    def enable_sampling(self, prompter: Prompter) -> None:
+        self.handler_registry.register("sampling/createMessage", SamplingHandler(prompter))
+
+    def disable(self, method: str) -> None:
+        self.handler_registry.unregister(method)
+
     def roots_list_changed(self) -> bool:
         """Tell the server our roots changed, if the handshake promised we would."""
         roots = self.state.client_capabilities.get("roots")
@@ -660,6 +672,9 @@ def print_notification(msg: JsonObject) -> None:
         if isinstance(message, str):
             line += f"  {sanitize(message)}"
         eprint(cyan(line))
+        return
+    if method == "notifications/elicitation/complete":
+        eprint(cyan(f"  *** elicitation {sanitize(str(p.get('elicitationId', '?')))} completed out of band"))
         return
     if params:
         eprint(cyan(f"  *** notification: {method} {safe_json(params, indent=None)}"))

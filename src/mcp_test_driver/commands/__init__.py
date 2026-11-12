@@ -42,7 +42,7 @@ class Arg(StrEnum):
 
 
 # Display order of groups in /help.
-GROUPS = ("Tools", "Resources", "Prompts", "Server", "Protocol", "Diagnostics", "Auth", "Session")
+GROUPS = ("Tools", "Resources", "Prompts", "Server", "Client", "Protocol", "Diagnostics", "Auth", "Session")
 
 # A handler returns False to end the REPL; anything else continues.
 Handler = Callable[["Repl", str], "bool | None"]
@@ -106,4 +106,4 @@ def by_group() -> list[tuple[str, list[Command]]]:
 
 
 # Register the command modules.  Imported last: they use `command` above.
-from . import core, diag, protocol_cmds, server  # noqa: E402, F401
+from . import client, core, diag, protocol_cmds, server  # noqa: E402, F401

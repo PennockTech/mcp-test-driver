@@ -18,7 +18,7 @@ from .completion import (
 from .diagnostics import Finding, Level
 from .parse import parse_args
 from .protocol import McpError, RequestCancelled
-from .render import render_response
+from .render import render_error, render_response
 from .sanitize import sanitize
 from .transport import SessionExpiredError, TransportError
 
@@ -209,9 +209,7 @@ class Repl:
         except ConnectionError as e:
             print(red(f"Connection lost: {e}"))
         except McpError as e:
-            print(red(f"MCP error [{e.code}]: {e.message}"))
-            if e.data:
-                print(red(f"  {sanitize(json.dumps(e.data, ensure_ascii=False))}"))
+            render_error({"code": e.code, "message": e.message, "data": e.data})
         except ValueError as e:
             print(red(f"Error: {e}"))
         except Exception as e:
