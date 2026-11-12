@@ -1,5 +1,5 @@
 {
-  "client_id": "https://pennocktech.github.io/mcp-test-driver/oauth/client.json",
+  "client_id": "https://mcp-test-driver.pennock.tech/oauth/client.json",
   "client_name": "mcp-test-driver",
   "client_uri": "https://github.com/PennockTech/mcp-test-driver",
   "redirect_uris": [

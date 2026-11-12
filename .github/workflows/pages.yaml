@@ -5,7 +5,10 @@
 # ID Metadata Document (site/oauth/client.json) whose URL is mcp-test-driver's
 # default OAuth client_id; authorization servers fetch it during login.
 #
-# One-time setup: repo Settings -> Pages -> Source: "GitHub Actions".
+# One-time setup: repo Settings -> Pages -> Source: "GitHub Actions", and the
+# custom domain mcp-test-driver.pennock.tech (site root, so the document is at
+# /oauth/client.json).  Deploys from Actions take the custom domain from those
+# settings, not from a CNAME file, so site/ has none.
 
 name: Pages
 
