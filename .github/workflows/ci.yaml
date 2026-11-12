@@ -45,9 +45,8 @@ jobs:
       - name: Test across Python versions
         run: uv run tox
 
-      # 2026-04-01: FIXME: these should be fixed before we go to v0.2.0
-#     - name: Lint
-#       run: uv run ruff check .
-#
-#     - name: Type-check
-#       run: uv run ty check .
+      - name: Lint
+        run: uv run ruff check
+
+      - name: Type-check
+        run: uv run ty check

@@ -6,6 +6,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from mcp_test_driver.protocol import McpSession
+from tests.fakes.memory import MemoryTransport
+
 import pytest
 
 from mcp_test_driver.handlers import (
@@ -164,179 +167,60 @@ class TestHandlerRegistry:
         assert "roots" not in registry.capabilities()
 
 
-class TestTransportServerRequestDispatch:
-    """Tests for server-to-client request handling in StdioTransport."""
+class TestSessionServerRequestDispatch:
+    """The session answers server-to-client requests via the registry."""
 
-    def test_server_request_dispatched(self) -> None:
-        """When the server sends a request (method+id), the transport
-        dispatches it via the handler registry and sends a response."""
-        import io
-        import json
-        from unittest.mock import MagicMock, patch
+    def _session(self, server_msgs: list[dict]) -> tuple[McpSession, MemoryTransport]:
+        def responder(payload: dict) -> list[dict]:
+            if isinstance(payload, dict) and payload.get("method") == "tools/list":
+                return [*server_msgs, {"jsonrpc": "2.0", "id": payload["id"], "result": {"tools": []}}]
+            return []
 
-        from mcp_test_driver.transport import StdioTransport
+        t = MemoryTransport(responder)
+        return McpSession(t), t
 
-        # Server sends: a server request (roots/list), then the actual response
-        server_request = {
-            "jsonrpc": "2.0",
-            "id": 99,
-            "method": "roots/list",
-            "params": {},
-        }
-        client_response = {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "result": {"tools": []},
-        }
-        response_lines = (
-            json.dumps(server_request, separators=(",", ":")).encode()
-            + b"\n"
-            + json.dumps(client_response, separators=(",", ":")).encode()
-            + b"\n"
-        )
-        mock_stdout = io.BytesIO(response_lines)
-        mock_stdin = io.BytesIO()
-
-        mock_proc = MagicMock()
-        mock_proc.stdin = mock_stdin
-        mock_proc.stdout = mock_stdout
-        mock_proc.stderr = None
-        mock_proc.wait = MagicMock()
-
-        with patch(
-            "mcp_test_driver.transport.subprocess.Popen", return_value=mock_proc
-        ):
-            transport = StdioTransport(["fake"])
-
-        transport.trace = False
-
-        # Set up a handler registry with a roots handler
-        registry = HandlerRegistry()
-        registry.register("roots/list", RootsHandler(Path.cwd()))
-        transport.handler_registry = registry
-
-        # Send a request — the transport should handle the server request
-        # in the middle, then return the actual response.
-        result = transport.request(
-            {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}
-        )
-
-        assert result is not None
-        assert result["id"] == 1
-
-        # Verify the transport sent a response to the server request
-        # by checking what was written to stdin (after our request).
-        stdin_data = mock_stdin.getvalue()
-        # Should contain at least two JSON messages: our request + the roots response
-        lines = [x for x in stdin_data.split(b"\n") if x.strip()]
-        assert len(lines) >= 2
-        roots_response = json.loads(lines[1])
-        assert roots_response["id"] == 99
-        assert "roots" in roots_response["result"]
+    def test_server_request_dispatched(self, tmp_path: Path) -> None:
+        s, t = self._session([{"jsonrpc": "2.0", "id": 99, "method": "roots/list", "params": {}}])
+        s.enable_roots(tmp_path)
+        assert s.list_tools() == []
+        reply = t.sent[1]
+        assert reply["id"] == 99 and reply["result"]["roots"][0]["uri"] == tmp_path.resolve().as_uri()
 
     def test_unsupported_server_request_returns_error(self) -> None:
-        """Server requests for unregistered methods get an error response."""
-        import io
-        import json
-        from unittest.mock import MagicMock, patch
+        s, t = self._session([{"jsonrpc": "2.0", "id": 42, "method": "unknown/method"}])
+        s.list_tools()
+        assert t.sent[1]["id"] == 42 and t.sent[1]["error"]["code"] == -32601
 
-        from mcp_test_driver.transport import StdioTransport
+    def test_handler_exception_becomes_internal_error(self) -> None:
+        class Boom:
+            def handle(self, params: dict) -> dict:
+                raise RuntimeError("kaboom")
 
-        server_request = {
-            "jsonrpc": "2.0",
-            "id": 42,
-            "method": "unknown/method",
-            "params": {},
-        }
-        client_response = {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "result": {},
-        }
-        response_lines = (
-            json.dumps(server_request, separators=(",", ":")).encode()
-            + b"\n"
-            + json.dumps(client_response, separators=(",", ":")).encode()
-            + b"\n"
-        )
-        mock_stdout = io.BytesIO(response_lines)
-        mock_stdin = io.BytesIO()
-
-        mock_proc = MagicMock()
-        mock_proc.stdin = mock_stdin
-        mock_proc.stdout = mock_stdout
-        mock_proc.stderr = None
-        mock_proc.wait = MagicMock()
-
-        with patch(
-            "mcp_test_driver.transport.subprocess.Popen", return_value=mock_proc
-        ):
-            transport = StdioTransport(["fake"])
-
-        transport.trace = False
-        transport.handler_registry = HandlerRegistry()  # empty registry
-
-        result = transport.request(
-            {"jsonrpc": "2.0", "id": 1, "method": "test", "params": {}}
-        )
-        assert result is not None
-
-        # Check that an error response was sent for the unknown method
-        stdin_data = mock_stdin.getvalue()
-        lines = [x for x in stdin_data.split(b"\n") if x.strip()]
-        assert len(lines) >= 2
-        error_response = json.loads(lines[1])
-        assert error_response["id"] == 42
-        assert "error" in error_response
-        assert error_response["error"]["code"] == -32601
+        s, t = self._session([{"jsonrpc": "2.0", "id": 7, "method": "x/boom"}])
+        s.handler_registry.register("x/boom", Boom())
+        s.list_tools()
+        assert t.sent[1]["error"] == {"code": -32603, "message": "kaboom"}
 
 
 class TestMcpSessionRoots:
     """Tests for roots enable/disable on McpSession."""
 
-    def test_enable_roots(self, tmp_path: Path) -> None:
-        from tests.test_protocol import FakeTransport
-
-        from mcp_test_driver.protocol import McpSession
-
-        transport = FakeTransport([])
-        session = McpSession(transport)
+    def test_enable_disable(self, tmp_path: Path) -> None:
+        session = McpSession(MemoryTransport())
         session.enable_roots(tmp_path)
         assert session.roots_handler is not None
         assert session.roots_handler.base == tmp_path.resolve()
-
-    def test_disable_roots(self, tmp_path: Path) -> None:
-        from tests.test_protocol import FakeTransport
-
-        from mcp_test_driver.protocol import McpSession
-
-        transport = FakeTransport([])
-        session = McpSession(transport)
-        session.enable_roots(tmp_path)
-        assert session.roots_handler is not None
+        assert session.client_capabilities() == {"roots": {"listChanged": True}}
         session.disable_roots()
         assert session.roots_handler is None
+        assert session.client_capabilities() == {}
 
-    def test_capabilities_include_roots_when_enabled(self, tmp_path: Path) -> None:
-        from tests.test_protocol import FakeTransport
-
-        from mcp_test_driver.protocol import McpSession
-
-        transport = FakeTransport([])
-        session = McpSession(transport)
+    def test_list_changed_only_after_initialize(self, tmp_path: Path) -> None:
+        t = MemoryTransport()
+        session = McpSession(t)
         session.enable_roots(tmp_path)
-        caps = session.handler_registry.capabilities()
-        assert "roots" in caps
-
-    def test_initialize_sends_roots_capability(self, tmp_path: Path) -> None:
-        from tests.test_protocol import FakeTransport, _server_info_response
-
-        from mcp_test_driver.protocol import McpSession
-
-        transport = FakeTransport([_server_info_response()])
-        session = McpSession(transport)
-        session.enable_roots(tmp_path)
-        session.initialize()
-
-        req = transport.sent[0]
-        assert "roots" in req["params"]["capabilities"]
+        assert session.roots_list_changed() is False
+        session.state.initialized = True
+        session.state.client_capabilities = session.client_capabilities()
+        assert session.roots_list_changed() is True
+        assert t.sent[-1]["method"] == "notifications/roots/list_changed"

@@ -16,17 +16,38 @@ The package lives under `src/mcp_test_driver/` (src layout, built with
 
 ```
 src/mcp_test_driver/
-  cli.py         # argparse entry point (mcp-test-driver console script)
-  repl.py        # the interactive loop, command dispatch, history
+  cli.py         # argparse entry point; non-interactive modes (--check, --exec, ...)
+  repl.py        # the interactive loop, list cache, task following
+  commands/      # builtin /commands: registry (__init__) + one module per area
   completion.py  # readline tab-completion + help keybindings + ReadlineModule Protocol
-  protocol.py    # JSON-RPC framing and MCP method bindings
-  transport.py   # stdio + HTTP Streamable transport, response sanitization
-  handlers.py    # client-side handlers (e.g. roots/list)
-  parse.py       # command-line argument parsing for the REPL
+  helptext.py    # /help, per-command and per-tool help output
+  protocol.py    # McpSession: receive loop, per-revision framing, MRTR, dispatch
+  negotiate.py   # era (handshake vs stateless) and revision; legacy SSE fallback
+  versions.py    # registry of spec revisions: methods, capabilities, features
+  messages.py    # JSON-RPC message shapes and classification
+  transport/     # stdio, Streamable HTTP, legacy HTTP+SSE, SSE parser, x-mcp-header
+  handlers.py    # client-side handlers for server requests (roots/list, ...)
+  interactive.py # elicitation and sampling handlers (interactive and automatic)
+  tasks.py       # tasks: 2025-11-25 core and the 2026 extension
+  checks.py      # passive conformance checks -> findings
+  probe.py       # active probes and the /check suite
+  diagnostics.py # Finding / DiagnosticLog / print_findings
+  report.py      # start-up connection report (/info)
+  render.py      # rendering results and content blocks (sanitized)
+  sanitize.py    # sanitize() / safe_json() for all server-supplied text
+  fetch.py       # narrow JSON fetcher for server-supplied URLs (SSRF limits)
+  auth_diag.py   # OAuth discovery (PRM, AS metadata) and checks
+  oauth.py       # OAuth client: PKCE, CIMD/DCR, refresh, step-up, token cache
+  parse.py       # key=value argument parsing for the REPL
   color.py       # ANSI color helpers
 tests/           # pytest suite, mirrors src/ module-for-module
-docs/            # security model, MCP spec notes, future plans
-.github/workflows/  # CI (tox across Python 3.12/3.13/3.14)
+  fakes/         # scenario-driven fake MCP servers (stdio, HTTP, OAuth, in-memory)
+  integration/   # opt-in tests against real SDK servers (MCPTD_INTEGRATION=1)
+docs/            # security model, MCP spec notes, feature matrix, roadmap
+  specs/         # vendored upstream MCP schemas + conformance lists (do not edit)
+scripts/         # fetch-specs.sh refreshes docs/specs/; conformance-client.sh
+site/            # GitHub Pages: OAuth client metadata document (CIMD)
+.github/workflows/  # CI (tox + ruff + ty), conformance client suite, Pages
 Taskfile.yml     # `task` runner shortcuts (lint, typecheck, test, check)
 ```
 
@@ -69,8 +90,13 @@ uv run tox            # all configured Python versions
 uv run tox -e py312   # one specific version
 ```
 
-CI runs `tox` on push/PR (see `.github/workflows/ci.yaml`); ruff and ty
-are commented out in CI for now but **must** still be run locally.
+CI runs `tox`, `ruff check` and `ty check` on push/PR (see
+`.github/workflows/ci.yaml`), and the official conformance suite's client
+scenarios on PRs touching `src/` (`task conformance` locally; needs Node).
+
+Tests use scenario-driven fake servers in `tests/fakes/` (see the
+docstrings of `engine.py`, `http_server.py` and `auth_server.py` for the
+scenario keys); extend those rather than mocking transports.
 
 ## Coding conventions
 
@@ -85,7 +111,7 @@ are commented out in CI for now but **must** still be run locally.
 - **No bare `object` returns** for things callers will index into.  If a
   function returns "some module-like thing", give it a structural type.
 - **Sanitize all server-supplied strings** before printing or feeding them
-  to readline.  Use `transport.sanitize` — see `docs/security-model.md`
+  to readline.  Use `sanitize.sanitize` / `sanitize.safe_json` — see `docs/security-model.md`
   for the threat model.  Tool names are additionally stripped of the
   builtin `/` prefix so a malicious server cannot shadow `/quit` etc.
 - **Tests live next to the module they cover** (`tests/test_<module>.py`).
@@ -119,10 +145,23 @@ are commented out in CI for now but **must** still be run locally.
   preserve those branches and the defensive `getattr` checks when
   refactoring.  See the `ReadlineModule` Protocol docstring.
 - **Terminal injection**: never `print()` raw server-supplied data.
+- **MCP spec revisions**: the protocol has a handshake era (2024-11-05
+  to 2025-11-25) and a stateless era (2026-07-28 onwards).  Check
+  `docs/mcp-feature-matrix.md` and the vendored schemas in `docs/specs/`
+  before assuming a method or field exists.  Do not hand-edit
+  `docs/specs/`; re-run `scripts/fetch-specs.sh`.  The planned work is
+  in `docs/roadmap-multi-version.md`.
 - **HTTP transport**: respect existing SSRF and redirect-handling logic
   in `transport.py`.
 - **JSON-RPC IDs**: do not reuse or guess IDs; the dispatcher matches
   responses by ID.
+- **Never gate features on the negotiated revision.**  The revision picks
+  defaults (wire format, headers) and labels findings; users must always
+  be able to send anything.  Refuse only where continuing would leak
+  credentials (OAuth audience/issuer mismatches).
+- **Printing happens on the main thread.**  Reader threads (stdio stderr,
+  SSE streams) only queue; keep it that way so output never corrupts the
+  readline prompt.
 
 ## Quick reference
 

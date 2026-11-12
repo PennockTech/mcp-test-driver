@@ -1,0 +1,2 @@
+# Upstream MCP schemas and conformance lists, refreshed by scripts/fetch-specs.sh.
+docs/specs/** linguist-vendored
