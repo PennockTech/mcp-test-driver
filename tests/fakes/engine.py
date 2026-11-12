@@ -24,6 +24,9 @@ Scenario keys (all optional):
     tool_scripts    {tool: [step, ...]}  steps: {"notify": msg} {"request": msg}
                     {"reply": result} {"reply_error": err} {"stderr": s} {"exit": n}
                     {"raw": s} {"sleep": s} {"mrtr": {key: request}}
+                    {"task": {"polls": n, "input": {key: request}?, "result": {...}}}
+                      answers with a task handle: 2025-11-25 style ({"task": ...})
+                      if the call had params.task, else the 2026 extension style
     resource_contents  {uri: [contents]}
     completions     list of values for completion/complete
     on_unknown_pre_init  "error" | "silent" | "exit"   (legacy servers)
@@ -31,6 +34,7 @@ Scenario keys (all optional):
     batch_responses  answer with single-element batch arrays
     log_path        append every received message as a JSON line
     omit_result_type  modern replies without resultType/serverInfo (to provoke findings)
+    skills          entries for skills/list (skills/get finds by uri)
     listen_support  filter keys the server honours (default: all four)
     listen_events   notifications sent on a subscriptions/listen stream
 """
@@ -68,6 +72,7 @@ class FakeMcp:
         self.negotiated: str | None = None
         self._next_id = 1000
         self.subscriptions: set[Any] = set()
+        self.tasks: dict[str, dict[str, Any]] = {}
 
     # ── helpers ────────────────────────────────────────────────────────
 
@@ -248,6 +253,16 @@ class FakeMcp:
                 ev.setdefault("params", {}).setdefault("_meta", {}).update(tag)
                 yield ("send", ev)
             yield ("hold", req_id)
+        elif method.startswith("tasks/") and self._has_tasks():
+            yield ("send", self._task_method(req_id, method, params))
+        elif method == "skills/list":
+            yield ("send", self.reply(req_id, {"skills": self.s.get("skills", [])}))
+        elif method == "skills/get":
+            entry = next((e for e in self.s.get("skills", []) if e.get("uri") == params.get("uri")), None)
+            if entry is None:
+                yield ("send", error(req_id, -32602, "Unknown skill"))
+            else:
+                yield ("send", self.reply(req_id, entry))
         elif method == "completion/complete":
             values = self.s.get("completions", [])
             prefix = (params.get("argument") or {}).get("value", "")
@@ -256,6 +271,78 @@ class FakeMcp:
             }))
         else:
             yield ("send", error(req_id, -32601, f"Method not found: {method}"))
+
+    # ── tasks (2025-11-25 core and the 2026 extension) ─────────────────
+
+    def _has_tasks(self) -> bool:
+        """Only scenarios that use tasks implement the tasks/* methods."""
+        scripts = self.s.get("tool_scripts", {}).values()
+        return "tasks" in self.s.get("capabilities", {}) or any("task" in step for s in scripts for step in s)
+
+    def _new_task(self, spec: dict[str, Any], *, core: bool, args: dict[str, Any]) -> dict[str, Any]:
+        tid = f"task-{len(self.tasks) + 1}"
+        self.tasks[tid] = {"spec": spec, "core": core, "polls": 0, "status": "working",
+                           "input_done": "input" not in spec, "responses": None, "args": args}
+        view = self._task_view(tid)
+        return {"task": view} if core else {**view, "resultType": "task"}
+
+    def _task_view(self, tid: str) -> dict[str, Any]:
+        t = self.tasks[tid]
+        view: dict[str, Any] = {"taskId": tid, "status": t["status"], "createdAt": "2026-01-01T00:00:00Z",
+                                "lastUpdatedAt": "2026-01-01T00:00:00Z"}
+        if t["core"]:
+            view.update({"ttl": None, "pollInterval": 10})
+        else:
+            view.update({"ttlMs": None, "pollIntervalMs": 10})
+            if t["status"] == "input_required":
+                view["inputRequests"] = t["spec"]["input"]
+            if t["status"] == "completed":
+                view["result"] = self._task_result(tid)
+        return view
+
+    def _task_result(self, tid: str) -> dict[str, Any]:
+        t = self.tasks[tid]
+        result = dict(t["spec"].get("result", {"content": [{"type": "text", "text": "done"}]}))
+        if t["responses"] is not None:
+            result["content"] = [{"type": "text", "text": json.dumps(t["responses"])}]
+        return result
+
+    def _advance(self, tid: str) -> None:
+        t = self.tasks[tid]
+        if t["status"] in ("completed", "cancelled", "failed"):
+            return
+        t["polls"] += 1
+        if not t["input_done"] and not t["core"]:
+            t["status"] = "input_required"
+        elif t["polls"] >= t["spec"].get("polls", 1):
+            t["status"] = "completed"
+        else:
+            t["status"] = "working"
+
+    def _task_method(self, req_id: Any, method: str, params: dict[str, Any]) -> dict[str, Any]:
+        if method == "tasks/list":
+            return self.reply(req_id, {"tasks": [self._task_view(tid) for tid in self.tasks]})
+        tid = params.get("taskId")
+        if tid not in self.tasks:
+            return error(req_id, -32602, f"Unknown task {tid}")
+        t = self.tasks[tid]
+        if method == "tasks/get":
+            self._advance(tid)
+            return self.reply(req_id, self._task_view(tid))
+        if method == "tasks/update":
+            t["responses"] = params.get("inputResponses")
+            t["input_done"] = True
+            t["status"] = "working"
+            return self.reply(req_id, {})
+        if method == "tasks/cancel":
+            if t["status"] in ("completed", "cancelled", "failed"):
+                return error(req_id, -32602, "Task already finished")
+            t["status"] = "cancelled"
+            return self.reply(req_id, self._task_view(tid))
+        if method == "tasks/result":
+            t["status"] = "completed"
+            return self.reply(req_id, self._task_result(tid))
+        return error(req_id, -32601, f"Method not found: {method}")
 
     def listen_closed(self, sub: Any) -> dict[str, Any]:
         return result(sub, self._wrap({"_meta": {META + "subscriptionId": sub}}))
@@ -292,6 +379,9 @@ class FakeMcp:
                     }))
                     return
                 answers.append({"inputResponses": responses, "requestState": params.get("requestState")})
+            elif "task" in step:
+                yield ("send", self.reply(req_id, self._new_task(step["task"], core="task" in params, args=args)))
+                return
             elif "reply" in step:
                 value = dict(step["reply"])
                 if answers and "content" not in value:

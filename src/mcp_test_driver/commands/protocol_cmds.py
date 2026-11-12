@@ -46,7 +46,10 @@ def cmd_send(repl: Repl, rest: str) -> None:
         print(red("Usage: /send <method> [params]"))
         return
     resp = repl.session.send_request(parts[0], _params(parts[1] if len(parts) > 1 else ""))
-    repl.show(resp)
+    if parts[0] == "tools/call":
+        repl.show_call(resp)
+    else:
+        repl.show(resp)
 
 
 @command(

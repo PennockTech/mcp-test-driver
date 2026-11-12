@@ -55,6 +55,9 @@ src = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+  "integration: against real MCP servers; needs network, uv and Node (set MCPTD_INTEGRATION=1)",
+]
 
 [tool.tox]
 requires = ["tox-uv>=1.25"]

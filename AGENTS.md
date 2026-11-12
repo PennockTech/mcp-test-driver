@@ -16,32 +16,38 @@ The package lives under `src/mcp_test_driver/` (src layout, built with
 
 ```
 src/mcp_test_driver/
-  cli.py         # argparse entry point (mcp-test-driver console script)
-  repl.py        # the interactive loop, list cache, finding display
+  cli.py         # argparse entry point; non-interactive modes (--check, --exec, ...)
+  repl.py        # the interactive loop, list cache, task following
   commands/      # builtin /commands: registry (__init__) + one module per area
   completion.py  # readline tab-completion + help keybindings + ReadlineModule Protocol
   helptext.py    # /help, per-command and per-tool help output
-  protocol.py    # McpSession: receive loop, request framing per revision, dispatch
-  negotiate.py   # choosing era (handshake vs stateless) and revision
+  protocol.py    # McpSession: receive loop, per-revision framing, MRTR, dispatch
+  negotiate.py   # era (handshake vs stateless) and revision; legacy SSE fallback
   versions.py    # registry of spec revisions: methods, capabilities, features
   messages.py    # JSON-RPC message shapes and classification
-  transport/     # stdio, Streamable HTTP, SSE parsing; Transport Protocol
+  transport/     # stdio, Streamable HTTP, legacy HTTP+SSE, SSE parser, x-mcp-header
   handlers.py    # client-side handlers for server requests (roots/list, ...)
+  interactive.py # elicitation and sampling handlers (interactive and automatic)
+  tasks.py       # tasks: 2025-11-25 core and the 2026 extension
   checks.py      # passive conformance checks -> findings
-  diagnostics.py # Finding / DiagnosticLog
+  probe.py       # active probes and the /check suite
+  diagnostics.py # Finding / DiagnosticLog / print_findings
   report.py      # start-up connection report (/info)
   render.py      # rendering results and content blocks (sanitized)
   sanitize.py    # sanitize() / safe_json() for all server-supplied text
-  oauth.py       # OAuth client (CIMD client_id constant so far)
+  fetch.py       # narrow JSON fetcher for server-supplied URLs (SSRF limits)
+  auth_diag.py   # OAuth discovery (PRM, AS metadata) and checks
+  oauth.py       # OAuth client: PKCE, CIMD/DCR, refresh, step-up, token cache
   parse.py       # key=value argument parsing for the REPL
   color.py       # ANSI color helpers
 tests/           # pytest suite, mirrors src/ module-for-module
-  fakes/         # scenario-driven fake MCP servers (stdio, HTTP, in-memory)
+  fakes/         # scenario-driven fake MCP servers (stdio, HTTP, OAuth, in-memory)
+  integration/   # opt-in tests against real SDK servers (MCPTD_INTEGRATION=1)
 docs/            # security model, MCP spec notes, feature matrix, roadmap
   specs/         # vendored upstream MCP schemas + conformance lists (do not edit)
-scripts/         # fetch-specs.sh refreshes docs/specs/
+scripts/         # fetch-specs.sh refreshes docs/specs/; conformance-client.sh
 site/            # GitHub Pages: OAuth client metadata document (CIMD)
-.github/workflows/  # CI (tox across Python 3.12/3.13/3.14)
+.github/workflows/  # CI (tox + ruff + ty), conformance client suite, Pages
 Taskfile.yml     # `task` runner shortcuts (lint, typecheck, test, check)
 ```
 
@@ -84,8 +90,13 @@ uv run tox            # all configured Python versions
 uv run tox -e py312   # one specific version
 ```
 
-CI runs `tox` on push/PR (see `.github/workflows/ci.yaml`); ruff and ty
-are commented out in CI for now but **must** still be run locally.
+CI runs `tox`, `ruff check` and `ty check` on push/PR (see
+`.github/workflows/ci.yaml`), and the official conformance suite's client
+scenarios on PRs touching `src/` (`task conformance` locally; needs Node).
+
+Tests use scenario-driven fake servers in `tests/fakes/` (see the
+docstrings of `engine.py`, `http_server.py` and `auth_server.py` for the
+scenario keys); extend those rather than mocking transports.
 
 ## Coding conventions
 
@@ -144,6 +155,13 @@ are commented out in CI for now but **must** still be run locally.
   in `transport.py`.
 - **JSON-RPC IDs**: do not reuse or guess IDs; the dispatcher matches
   responses by ID.
+- **Never gate features on the negotiated revision.**  The revision picks
+  defaults (wire format, headers) and labels findings; users must always
+  be able to send anything.  Refuse only where continuing would leak
+  credentials (OAuth audience/issuer mismatches).
+- **Printing happens on the main thread.**  Reader threads (stdio stderr,
+  SSE streams) only queue; keep it that way so output never corrupts the
+  readline prompt.
 
 ## Quick reference
 

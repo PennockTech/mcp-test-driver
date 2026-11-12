@@ -72,6 +72,7 @@ mcp> unicode_lookup_char char=✓
 | `--sampling`             | Answer sampling requests yourself (you play the LLM)            |
 | `--progress`             | Attach progress tokens to calls                                 |
 | `--otel`                 | Send a fresh OpenTelemetry `traceparent` with each request      |
+| `--extension ID[=JSON]`  | Declare a client extension (repeatable)                         |
 | `--check`                | Run the conformance checks, then exit (1 on failure, 2 if unreachable) |
 | `--probe`                | Probe which features the server supports, then exit             |
 | `--probe-versions`       | Offer each known revision in turn; report what is negotiated   |
@@ -126,6 +127,10 @@ lists everything; `/help <command>` shows usage.
 | `/unsubscribe <uri>`            | `/unsub` | Unsubscribe from resource updates             |
 | `/prompts`                      | `/lp`    | List prompts                                  |
 | `/prompt <name> [key=val ...]`  | `/p`     | Get a prompt                                  |
+| `/task <tool> [key=val ...]`    |          | Call a tool as a task, following it to the end |
+| `/tasks list\|get\|wait\|result\|update\|cancel` | | Manage tasks                         |
+| `/app [save <tool\|uri> <file>]` |         | MCP Apps: list UI resources, save one as HTML |
+| `/skills [get\|read <uri>]`     |          | Skills extension: list, describe, read (digest-checked) |
 
 Lists the server does not advertise are fetched on demand, with a note.
 
@@ -149,6 +154,7 @@ Lists the server does not advertise are fetched on demand, with a note.
 | `/sampling on \| off`                | Answer sampling requests yourself                   |
 | `/progress on \| off`                | Attach progress tokens to calls                     |
 | `/otel on \| off`                    | Send (and print) a `traceparent` with each request  |
+| `/extension [add ID [settings] \| remove ID]` | Declare client extensions; show both sides' |
 
 Capability changes reach handshake-era servers after `/reconnect`.
 
@@ -197,6 +203,30 @@ While you work, the driver notes anything worth knowing, labelled by kind:
 - **note**: everything else, such as sending a method the revision lacks.
 
 New findings are printed before each prompt; `/findings` lists them all.
+
+## Extensions
+
+Extensions (2026-07-28's `capabilities.extensions`) are off by default, as
+the spec asks; `--extension ID` or `/extension add ID` declares one, and
+the start-up report lists the server's.
+
+- **Tasks**: both generations.  2025-11-25 core tasks: `/task <tool>`
+  sends `params.task`, the driver polls `tasks/get` at the server's
+  interval and fetches `tasks/result`.  The 2026 tasks extension
+  (`io.modelcontextprotocol/tasks`): `/task` declares it, and any tool
+  call answered with a task handle (`resultType: "task"`) is followed,
+  answering `input_required` with `tasks/update` through the usual
+  elicitation/sampling handlers.  Ctrl-C detaches; `/tasks` lists, gets,
+  waits for, updates and cancels tasks.
+- **MCP Apps** (`io.modelcontextprotocol/ui`): `/app` lists tools whose
+  `_meta.ui.resourceUri` names a `ui://` resource; `/app save` writes the
+  HTML to a file.  It is never rendered in the terminal.
+- **Skills** (`io.modelcontextprotocol/skills`): `/skills` lists them,
+  `/skills get` shows an entry, and `/skills read` reads a file and checks
+  it against the digest from the listing.
+- **Structured output**: a tool with an `outputSchema` that returns no
+  `structuredContent` is flagged; with the `jsonschema` package installed
+  alongside, the content is validated against the schema too.
 
 ## Probing and conformance checks
 
@@ -328,9 +358,11 @@ except to loopback hosts.
 
 ## Known Limitations
 
-Work in progress is tracked in
-[docs/roadmap-multi-version.md](docs/roadmap-multi-version.md).
-
+- OAuth extensions beyond client credentials (enterprise-managed
+  authorization, DPoP, `private_key_jwt`, WIF) are not implemented;
+  discovery shows what an authorization server offers.
+- Our Client ID Metadata Document is published from `main` via GitHub
+  Pages; until that is live, use `--client-id` or DCR.
 
 ## Installation
 
@@ -355,7 +387,14 @@ uv run pytest
 ```
 
 The tests drive real subprocess and HTTP fake servers (`tests/fakes/`)
-built from scenarios, so behaviour is checked end to end.  The protocol
+built from scenarios, so behaviour is checked end to end.  Two opt-in
+suites check against real implementations:
+
+- `task test-integration` (or `MCPTD_INTEGRATION=1 uv run pytest -m
+  integration`) runs the driver against the official Python SDK and the
+  TypeScript "everything" reference server; needs network, uv and Node.
+- `task conformance` runs the official conformance suite's client
+  scenarios against the driver.  The protocol
 revision registry is cross-checked against the vendored upstream schemas
 in `docs/specs/`; refresh them with `scripts/fetch-specs.sh`.
 
