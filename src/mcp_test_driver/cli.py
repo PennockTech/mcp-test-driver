@@ -63,6 +63,13 @@ def build_parser() -> argparse.ArgumentParser:
                    help="how long to wait for a reply (default 120)")
     g.add_argument("--roots", type=Path, metavar="PATH",
                    help="advertise a filesystem root (bare --roots: the current directory)")
+    g.add_argument("--elicitation", nargs="?", const="form,url", metavar="MODES",
+                   help="answer elicitation requests interactively; MODES is form, url "
+                   "or form,url (the default)")
+    g.add_argument("--sampling", action="store_true",
+                   help="answer sampling requests yourself (you play the LLM)")
+    g.add_argument("--progress", action="store_true",
+                   help="attach progress tokens to calls")
 
     g = p.add_argument_group("transport")
     g.add_argument("--transport", choices=("auto", "stdio", "http"), default="auto",
@@ -178,6 +185,20 @@ def run_session(transport: Transport, args: argparse.Namespace) -> None:
         except (OSError, ValueError) as e:
             print(f"Error: cannot use --roots {args.roots}: {e}", file=sys.stderr)
             sys.exit(1)
+    if args.elicitation or args.sampling:
+        from .completion import suspend_completion
+        from .interactive import ConsolePrompter
+
+        prompter = ConsolePrompter(suspend_completion)
+        if args.elicitation:
+            modes = frozenset(m.strip() for m in args.elicitation.split(","))
+            if not modes <= {"form", "url"}:
+                print("Error: --elicitation modes are form and/or url", file=sys.stderr)
+                sys.exit(1)
+            session.enable_elicitation(prompter, modes)
+        if args.sampling:
+            session.enable_sampling(prompter)
+    session.progress = args.progress
     try:
         connect(session, ConnectOptions(era="legacy", version=args.protocol_version))
     except TransportError as e:

@@ -182,8 +182,21 @@ def render_error(err: JsonValue) -> None:
     label = f"{sanitize_any(code)}{' ' + name if name else ''}"
     print(red(f"Server error [{label}]: {sanitize_any(err.get('message', 'Unknown error'))}"))
     data = err.get("data")
-    if data is not None:
+    if code == versions.URL_ELICITATION_REQUIRED and isinstance(data, dict):
+        render_url_elicitations(data.get("elicitations"))
+    elif data is not None:
         _out(red(safe_json(data)), 2)
+
+
+def render_url_elicitations(elicitations: JsonValue) -> None:
+    """-32042: the server needs the user to visit URLs before retrying."""
+    print(dim("  The server needs you to complete these first, then retry:"))
+    for e in elicitations if isinstance(elicitations, list) else []:
+        if not isinstance(e, dict):
+            continue
+        print(f"    {bold(sanitize_any(e.get('url', '?')))}")
+        if e.get("message"):
+            print(f"      {sanitize_any(e['message'])}")
 
 
 def render_result(result: JsonValue) -> None:

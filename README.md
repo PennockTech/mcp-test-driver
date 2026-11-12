@@ -65,6 +65,9 @@ mcp> unicode_lookup_char char=✓
 | `--protocol-version REV` | Revision to offer (default: latest handshake revision)          |
 | `--timeout SECS`         | How long to wait for a reply (default 120)                      |
 | `--roots[=PATH]`         | Advertise a filesystem root (bare `--roots`: current directory) |
+| `--elicitation[=MODES]`  | Answer elicitation requests interactively (`form`, `url`)       |
+| `--sampling`             | Answer sampling requests yourself (you play the LLM)            |
+| `--progress`             | Attach progress tokens to calls                                 |
 | `--transport KIND`       | Force `stdio` or `http` instead of guessing from the target     |
 | `--header 'NAME: VALUE'` | Extra HTTP header (repeatable)                                  |
 | `--bearer-env VAR`       | Send `Authorization: Bearer $VAR`                               |
@@ -100,6 +103,17 @@ Lists the server does not advertise are fetched on demand, with a note.
 | `/ping`                                          |       | Ping the server                                 |
 | `/loglevel <level> [--rpc]`                      | `/ll` | Set the server log level                        |
 | `/roots [on [path] \| off \| add <path> \| remove <uri>]` |  | Show or change the roots capability   |
+
+### Client capabilities
+
+| Command                              | Description                                         |
+| ------------------------------------ | --------------------------------------------------- |
+| `/client`                            | Capabilities and per-request options we send        |
+| `/elicitation on [form,url] \| off`  | Answer elicitation requests interactively           |
+| `/sampling on \| off`                | Answer sampling requests yourself                   |
+| `/progress on \| off`                | Attach progress tokens to calls                     |
+
+Capability changes reach handshake-era servers after `/reconnect`.
 
 ### Protocol (raw access)
 
@@ -158,14 +172,36 @@ Security constraints:
 - Added roots must be descendants of the base path
 - The base path must exist when roots are enabled
 
+### Elicitation
+
+With `--elicitation` (or `/elicitation on`), the driver declares the
+elicitation capability and answers `elicitation/create` by asking you:
+
+- **Form mode** walks the requested schema field by field, with types,
+  defaults, ranges, and every enum style (plain, titled, multi-select).
+- **URL mode** (2025-11-25+) shows the URL and its host prominently and
+  asks for consent.  It never opens a browser; open the URL yourself if
+  you trust it.
+- Type `!decline` or `!cancel` at any prompt to end with that action.
+
+A `-32042` "URL elicitation required" error is shown as the list of URLs
+the server wants you to visit before retrying.
+
+### Sampling
+
+With `--sampling` (or `/sampling on`), the driver declares the sampling
+capability and you answer `sampling/createMessage` yourself: the server's
+messages, system prompt and offered tools are shown, and you type the
+assistant's reply, `!json {...}` for a complete result (e.g. a `tool_use`
+block), or `!decline`.  Handy for exercising agentic servers without
+wiring up a model.
+
 ## Known Limitations
 
 Work in progress is tracked in
 [docs/roadmap-multi-version.md](docs/roadmap-multi-version.md).
 
 - **2026-07-28 stateless protocol**: not yet negotiated automatically.
-- **Elicitation and sampling** requests from the server are answered with
-  "method not supported".
 - **Legacy HTTP+SSE transport** (2024-11-05): not yet supported.
 - **OAuth**: only static credentials (`--bearer-env`, `--header`).
 

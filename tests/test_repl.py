@@ -193,6 +193,22 @@ class TestCommands:
         assert "SEP-986" in capsys.readouterr().out
         r.handle_line("/last")
 
+    def test_client_capability_commands(self, make_repl: ReplFactory, capsys: pytest.CaptureFixture[str]) -> None:
+        r = make_repl()
+        r.handle_line("/elicitation on form,url")
+        r.handle_line("/sampling on")
+        r.handle_line("/progress on")
+        caps = r.session.client_capabilities()
+        assert caps["elicitation"] == {"form": {}, "url": {}} and caps["sampling"] == {}
+        assert r.session.progress
+        r.handle_line("/elicitation on bogus")
+        assert "form and/or url" in capsys.readouterr().out
+        r.handle_line("/elicitation off")
+        r.handle_line("/sampling off")
+        assert r.session.client_capabilities() == {}
+        r.handle_line("/client")
+        assert "per-request" in capsys.readouterr().out
+
     def test_trace_toggle(self, make_repl: ReplFactory) -> None:
         r = make_repl()
         r.handle_line("/trace on")
