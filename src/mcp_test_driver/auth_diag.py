@@ -105,6 +105,19 @@ def canonical_resource(url: str) -> str:
     return urlunsplit((p.scheme.lower(), netloc, p.path.rstrip("/") if p.path != "/" else "", p.query, ""))
 
 
+def resource_covers(resource: str, mcp_url: str) -> bool:
+    """Whether a protected resource identifier covers the MCP server's URL.
+
+    MCP allows either the server's own URI or a less specific one (such as
+    its origin) as the canonical resource; anything else is another server.
+    """
+    r, m = urlsplit(canonical_resource(resource)), urlsplit(canonical_resource(mcp_url))
+    if (r.scheme, r.netloc) != (m.scheme, m.netloc):
+        return False
+    rpath = r.path.rstrip("/")
+    return m.path == rpath or m.path.startswith(rpath + "/")
+
+
 def _origin(url: str) -> str:
     p = urlsplit(url)
     return urlunsplit((p.scheme, p.netloc, "", "", ""))
@@ -220,7 +233,7 @@ def _check_prm(disc: AuthDiscovery, mcp_url: str, log: DiagnosticLog) -> None:
     resource = prm.get("resource")
     if not isinstance(resource, str):
         log.violation("prm-no-resource", "PRM lacks resource", "RFC 9728 §2")
-    elif canonical_resource(resource) != disc.resource:
+    elif not resource_covers(resource, mcp_url):
         log.violation(
             "prm-resource-mismatch",
             f"PRM resource {sanitize(resource)!r} does not match the MCP URL {sanitize(disc.resource)!r}",
@@ -233,7 +246,8 @@ def _check_prm(disc: AuthDiscovery, mcp_url: str, log: DiagnosticLog) -> None:
 
 def check_as_metadata(meta: dict[str, Any], issuer: str, log: DiagnosticLog) -> None:
     got_issuer = meta.get("issuer")
-    if got_issuer != issuer and str(got_issuer).rstrip("/") != issuer.rstrip("/"):
+    # RFC 8414 §3.3: identical, compared as strings (no normalisation).
+    if got_issuer != issuer:
         log.violation("as-issuer-mismatch",
                       f"AS metadata issuer {sanitize_any(got_issuer)!r} differs from {sanitize(issuer)!r}",
                       "RFC 8414 §3.3")

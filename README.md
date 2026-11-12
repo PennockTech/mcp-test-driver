@@ -68,14 +68,22 @@ mcp> unicode_lookup_char char=✓
 | `--timeout SECS`         | How long to wait for a reply (default 120)                      |
 | `--roots[=PATH]`         | Advertise a filesystem root (bare `--roots`: current directory) |
 | `--elicitation[=MODES]`  | Answer elicitation requests interactively (`form`, `url`)       |
+| `--elicitation-auto`     | Accept form elicitations automatically with schema defaults     |
 | `--sampling`             | Answer sampling requests yourself (you play the LLM)            |
 | `--progress`             | Attach progress tokens to calls                                 |
 | `--otel`                 | Send a fresh OpenTelemetry `traceparent` with each request      |
+| `--check`                | Run the conformance checks, then exit (1 on failure, 2 if unreachable) |
+| `--probe`                | Probe which features the server supports, then exit             |
+| `--probe-versions`       | Offer each known revision in turn; report what is negotiated   |
+| `--json`                 | With `--check`/`--probe`: one JSON document on stdout          |
+| `-c LINE`, `--exec LINE` | Run REPL lines non-interactively, then exit (1 if any failed)  |
+| `--conformance-client`   | Act as a client for the official conformance runner            |
 | `--oauth`                | Log in with OAuth when the server asks (see Authorization)     |
 | `--auth-flow FLOW`       | `code` (default), `client-credentials` or `device`             |
 | `--client-id`, `--client-secret-env`, `--client-metadata-url` | OAuth client identity |
 | `--callback-port`, `--browser`, `--scope`, `--token-cache` | OAuth login options     |
 | `--transport KIND`       | Force `stdio`, `http` (Streamable HTTP) or `sse` (2024-11-05 HTTP+SSE) |
+| `--no-listen`            | Don't open the HTTP GET stream after `initialize`               |
 | `--header 'NAME: VALUE'` | Extra HTTP header (repeatable)                                  |
 | `--bearer-env VAR`       | Send `Authorization: Bearer $VAR`                               |
 | `--insecure`             | Skip TLS certificate verification (testing only)                |
@@ -162,6 +170,9 @@ Capability changes reach handshake-era servers after `/reconnect`.
 | `/findings`       | `/f`  | Conformance findings so far (`/findings clear`)          |
 | `/last`           |       | The last response as raw JSON                            |
 | `/server-card [url]` |     | Fetch the Server Card and AI Catalog; compare with the live server |
+| `/probe [versions]` |       | Probe what the server supports, or sweep protocol revisions |
+| `/matrix`         |       | Claimed vs observed support for the probed features      |
+| `/check`          |       | Conformance checks (error codes, headers, lists, caching) |
 | `/auth [discover\|login\|status\|refresh\|logout]` | | OAuth discovery, login and token management |
 | `/reconnect`      | `/rc` | Reconnect and re-negotiate                               |
 | `/cache-flush`    | `/cf` | Re-fetch tools, resources and prompts                    |
@@ -187,6 +198,39 @@ While you work, the driver notes anything worth knowing, labelled by kind:
 
 New findings are printed before each prompt; `/findings` lists them all.
 
+## Probing and conformance checks
+
+The negotiated revision says what a server *claims*; probes find out what
+it *does*:
+
+- `/probe` (`--probe`) sends targeted requests: `server/discover` on a
+  handshake-era server, `ping` on a stateless one, `logging/setLevel`,
+  completion, tasks and subscriptions without the capability, a JSON-RPC
+  batch, the HTTP GET stream.  `/matrix` lays the results out as claimed
+  vs observed; anything that works beyond the claimed revision, or fails
+  within it, becomes a finding.
+- `/probe versions` (`--probe-versions`) reconnects offering each known
+  revision and reports what the server negotiates, which also shows
+  dual-era servers.
+- `/check` (`--check`) runs conformance checks: list results, completion,
+  caching fields, error codes for unknown methods, unknown tools, missing
+  resources and malformed JSON, and over HTTP whether bad
+  `MCP-Protocol-Version`, mismatched `Mcp-Method` headers and foreign
+  `Origin`s are rejected.  Check IDs follow the official conformance
+  suite's scenario names where they test the same thing.
+- `--check --json` prints one JSON document (protocol, server, checks,
+  findings) and exits 1 on failures, 2 if the server is unreachable, so it
+  fits in CI.  `-c '/probe' -c 'my_tool x=1'` scripts any REPL lines.
+
+Probes never call the server's own tools; the only tool call names a tool
+that does not exist.
+
+The driver itself is tested as a client by the official
+[conformance suite](https://github.com/modelcontextprotocol/conformance):
+`scripts/conformance-client.sh` (or `task conformance`) runs every client
+scenario in the 2025-11-25 and 2026-07-28 requirement lists, and CI runs it
+on pull requests.
+
 ## Client Capabilities
 
 ### Roots
@@ -208,6 +252,8 @@ Security constraints:
 With `--elicitation` (or `/elicitation on`), the driver declares the
 elicitation capability and answers `elicitation/create` by asking you:
 
+- `--elicitation-auto` accepts every form elicitation with the schema's
+  defaults instead of asking (for scripted runs).
 - **Form mode** walks the requested schema field by field, with types,
   defaults, ranges, and every enum style (plain, titled, multi-select).
 - **URL mode** (2025-11-25+) shows the URL and its host prominently and

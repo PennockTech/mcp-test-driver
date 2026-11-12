@@ -41,7 +41,14 @@ from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import parse_qs, urlencode, urlsplit
 
-from .auth_diag import AuthDiscovery, canonical_resource, describe, discover, parse_www_authenticate
+from .auth_diag import (
+    AuthDiscovery,
+    canonical_resource,
+    describe,
+    discover,
+    parse_www_authenticate,
+    resource_covers,
+)
 from .color import bold, cyan, dim, eprint, red, yellow
 from .diagnostics import DiagnosticLog, Level
 from .fetch import Fetched, JsonFetcher
@@ -77,7 +84,10 @@ class OAuthOptions:
     flow: Flow = "code"
     client_id: str | None = None
     client_secret: str | None = None
+    # Use this Client ID Metadata Document even if the AS doesn't advertise CIMD.
     client_metadata_url: str | None = None
+    # The document to use when the AS does advertise CIMD (default: ours).
+    default_cimd_url: str = CIMD_CLIENT_ID
     callback_port: int | None = None
     browser: bool = False
     token_cache: Path | None = None
@@ -129,6 +139,23 @@ def _basic(client_id: str, secret: str) -> str:
 
     raw = f"{quote(client_id, safe='')}:{quote(secret, safe='')}".encode()
     return "Basic " + base64.b64encode(raw).decode()
+
+
+def headless_open(url: str) -> None:
+    """Stand in for a browser when the AS approves without asking (test harnesses).
+
+    Requests the authorization URL and delivers its redirect to our loopback
+    listener.  Only a redirect to a loopback address is followed.
+    """
+    import urllib3
+
+    pool = urllib3.PoolManager()
+    resp = pool.request("GET", url, redirect=False)
+    location = resp.headers.get("Location")
+    if location and urlsplit(location).hostname in ("127.0.0.1", "localhost", "::1"):
+        pool.request("GET", location, redirect=False)
+    elif location:
+        eprint(red(f"Authorization redirected to {sanitize(location)}; not following it."))
 
 
 # ── loopback redirect ──────────────────────────────────────────────────
@@ -312,10 +339,16 @@ class OAuthClient:
     def _refuse_unsafe(self, disc: AuthDiscovery) -> None:
         prm = as_obj(disc.prm)
         resource = prm.get("resource")
-        if isinstance(resource, str) and canonical_resource(resource) != self.resource:
+        if isinstance(resource, str) and not resource_covers(resource, self.mcp_url):
             raise OAuthError(
                 f"refusing to log in: protected resource metadata names {sanitize(resource)!r}, "
                 f"not this server ({sanitize(self.resource)!r}); a token for it could be misused (RFC 9728 §3.3)"
+            )
+        meta = as_obj(disc.as_metadata)
+        if meta and disc.as_url and meta.get("issuer") != disc.issuer:
+            raise OAuthError(
+                f"refusing to use authorization server metadata: its issuer {sanitize_any(meta.get('issuer'))!r} "
+                f"is not {sanitize_any(disc.issuer)!r} (RFC 8414 §3.3)"
             )
 
     # ── registration ───────────────────────────────────────────────────
@@ -334,7 +367,7 @@ class OAuthClient:
         if opts.flow == "client-credentials":
             raise OAuthError("the client-credentials flow needs --client-id and --client-secret-env")
         if meta.get("client_id_metadata_document_supported") or opts.client_metadata_url:
-            cid = opts.client_metadata_url or CIMD_CLIENT_ID
+            cid = opts.client_metadata_url or opts.default_cimd_url
             if not meta.get("client_id_metadata_document_supported"):
                 self.log.note("cimd-not-advertised", "using a Client ID Metadata Document the AS does not advertise")
             eprint(dim(f"  client: metadata document {sanitize(cid)}"))
@@ -442,7 +475,8 @@ class OAuthClient:
         advertised = meta.get("authorization_response_iss_parameter_supported") is True
         if iss is None and advertised:
             raise OAuthError("AS advertises iss in responses but sent none; refusing (RFC 9207)")
-        if iss is not None and iss != disc.issuer and iss.rstrip("/") != str(disc.issuer).rstrip("/"):
+        # RFC 9207: simple string comparison, no normalisation.
+        if iss is not None and iss != disc.issuer:
             raise OAuthError(f"iss {sanitize(iss)!r} is not the expected issuer; refusing (RFC 9207, mix-up attack)")
         if iss is not None and not advertised:
             self.log.note("iss-not-advertised", "AS sent iss without advertising authorization_response_iss_parameter_supported")

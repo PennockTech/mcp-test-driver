@@ -25,7 +25,7 @@ from . import __version__, messages, versions
 from .color import cyan, dim, eprint, red, yellow
 from .diagnostics import DiagnosticLog, Level
 from .handlers import HandlerError, HandlerRegistry, PingHandler, RootsHandler
-from .interactive import ElicitationHandler, Prompter, SamplingHandler
+from .interactive import AutoElicitationHandler, ElicitationHandler, Prompter, SamplingHandler
 from .messages import JsonObject, JsonValue, Kind, as_obj, classify
 from .negotiate import ConnectOptions
 from .sanitize import safe_json, sanitize
@@ -758,6 +758,9 @@ class McpSession:
 
     def enable_elicitation(self, prompter: Prompter, modes: frozenset[str] = frozenset({"form"})) -> None:
         self.handler_registry.register("elicitation/create", ElicitationHandler(prompter, modes))
+
+    def enable_auto_elicitation(self) -> None:
+        self.handler_registry.register("elicitation/create", AutoElicitationHandler())
 
     def enable_sampling(self, prompter: Prompter) -> None:
         self.handler_registry.register("sampling/createMessage", SamplingHandler(prompter))

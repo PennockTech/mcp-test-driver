@@ -31,6 +31,11 @@ tasks:
     cmds:
       - uv run tox {{.CLI_ARGS}}
 
+  conformance:
+    desc: Run the official conformance suite's client scenarios (needs node)
+    cmds:
+      - scripts/conformance-client.sh {{.CLI_ARGS}}
+
   check:
     desc: Run all checks (lint + typecheck + test)
     cmds:

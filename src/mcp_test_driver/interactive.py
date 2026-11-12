@@ -225,6 +225,42 @@ class ElicitationHandler:
         return out if multi else out[0]
 
 
+def default_value(prop: dict[str, Any]) -> Any:
+    """A schema's default, else a plain value of the right type."""
+    if "default" in prop:
+        return prop["default"]
+    choices = _choices(prop)
+    if choices:
+        values, _labels, multi = choices
+        return values[:1] if multi else values[0]
+    return {"boolean": True, "integer": 0, "number": 0, "array": []}.get(str(prop.get("type")), "")
+
+
+class AutoElicitationHandler:
+    """Accepts every form elicitation with the schema's defaults, unprompted.
+
+    For scripted runs (--elicitation-auto, --exec, conformance testing):
+    fields with a default get it, required fields without one get a plain
+    value of their type, optional ones are left out.
+    """
+
+    capability = ("elicitation", {"form": {}})
+
+    def handle(self, params: dict[str, Any]) -> dict[str, Any]:
+        if params.get("mode", "form") != "form":
+            raise HandlerError(-32602, "Only form-mode elicitation is answered automatically")
+        schema = as_obj(params.get("requestedSchema"))
+        req = schema.get("required")
+        required = req if isinstance(req, list) else []
+        content = {}
+        for name, raw in as_obj(schema.get("properties")).items():
+            prop = as_obj(raw)
+            if "default" in prop or name in required:
+                content[str(name)] = default_value(prop)
+        print(dim(f"  (elicitation answered automatically: {safe_json(content, indent=None)})"))
+        return {"action": "accept", "content": content}
+
+
 # ── sampling ───────────────────────────────────────────────────────────
 
 
