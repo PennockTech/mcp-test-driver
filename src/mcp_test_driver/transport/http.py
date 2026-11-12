@@ -4,8 +4,13 @@
 
 Each client message is a POST.  The reply is 202 (nothing to say), a JSON
 body, or an SSE stream which may carry notifications and server requests
-before the response.  Streams stay open between `receive()` calls so the
-session can answer a server request while the original call is pending.
+before the response.  In 2025-03-26 to 2025-11-25 a GET opens a listening
+stream for unsolicited server messages, and broken streams resume with
+Last-Event-ID; 2026-07-28 drops both.
+
+Every open SSE stream gets a reader thread that only parses and queues; the
+main thread takes items off the queue, so it alone prints, and receive()
+honours its timeout however many streams are open.
 
 Security: redirects are refused (SSRF), bodies and streams are size-capped,
 TLS is verified unless explicitly disabled, header values are checked for
@@ -16,10 +21,13 @@ from __future__ import annotations
 
 import base64
 import json
+import queue
 import re
+import threading
+import time
 from collections import deque
 from collections.abc import Iterator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import urllib3
@@ -53,20 +61,15 @@ from .sse import SseEvent, SseLimitExceeded, SseParser, iter_events
 # looks like our sentinel, is sent base64-encoded.
 _HEADER_SAFE = re.compile(r"[\x21-\x7e]([\x20-\x7e]*[\x21-\x7e])?")
 _B64_PREFIX = "=?base64?"
+# Limits on Last-Event-ID resumption, so a flapping server can't loop us.
+_MAX_RESUMES = 5
+_MAX_RETRY_WAIT = 30.0
 
 
 def encode_header_value(value: str) -> str:
     if _HEADER_SAFE.fullmatch(value) and not value.startswith(_B64_PREFIX):
         return value
     return _B64_PREFIX + base64.b64encode(value.encode()).decode() + "?="
-
-
-def _header(headers: Mapping[str, str], name: str) -> str | None:
-    lname = name.lower()
-    for k, v in headers.items():
-        if k.lower() == lname:
-            return v
-    return None
 
 
 def _iter_lines(resp: Any) -> Iterator[bytes]:
@@ -88,12 +91,18 @@ def _iter_lines(resp: Any) -> Iterator[bytes]:
         yield buf
 
 
-@dataclass
-class _Stream:
-    resp: Any  # urllib3.BaseHTTPResponse
+@dataclass(eq=False)
+class Stream:
+    resp: Any  # urllib3 BaseHTTPResponse
     parser: SseParser
-    events: Iterator[SseEvent]
-    origin: str  # "POST <method>" or "GET"
+    origin: str  # "POST tools/call", "GET", ...
+    # The request this POST stream must answer, for resumption decisions.
+    request_id: Any = None
+    answered: bool = False
+    abandoned: bool = False
+    resumes: int = 0
+    events: int = 0
+    done: threading.Event = field(default_factory=threading.Event)
 
 
 class HttpTransport:
@@ -118,8 +127,12 @@ class HttpTransport:
         self.authorization: str | None = None
         self._session_id: str | None = None
         self._inbox: deque[Any] = deque()
-        self._streams: deque[_Stream] = deque()
+        self._q: queue.Queue[tuple[str, Any, Any]] = queue.Queue()
+        self._streams: set[Stream] = set()
+        self._get_stream: Stream | None = None
         self.batches_received = 0
+        self.resumptions = 0
+        self.primed_streams = 0
         self.last_status: int | None = None
         self.last_headers: dict[str, str] = {}
         self._pool = urllib3.PoolManager(
@@ -158,11 +171,7 @@ class HttpTransport:
             if isinstance(method, str):
                 h["Mcp-Method"] = method
                 params = payload.get("params")
-                if isinstance(params, dict) and method in (
-                    "tools/call",
-                    "prompts/get",
-                    "resources/read",
-                ):
+                if isinstance(params, dict) and method in ("tools/call", "prompts/get", "resources/read"):
                     target = params.get("uri" if method == "resources/read" else "name")
                     if isinstance(target, str):
                         h["Mcp-Name"] = encode_header_value(target)
@@ -173,54 +182,62 @@ class HttpTransport:
 
     # ── sending ────────────────────────────────────────────────────────
 
-    def _request(self, method: str, headers: dict[str, str], body: bytes | None) -> Any:
+    def _request(
+        self, method: str, headers: dict[str, str], body: bytes | None, *, url: str | None = None,
+        read_timeout: float | None | bool = False,
+    ) -> Any:
+        kw: dict[str, Any] = {}
+        if read_timeout is not False:
+            kw["timeout"] = urllib3.util.Timeout(connect=HTTP_CONNECT_TIMEOUT, read=read_timeout)
         try:
             return self._pool.request(
                 method,
-                self.url,
+                url or self.url,
                 body=body,
                 headers=headers,
                 preload_content=False,
                 redirect=False,
+                **kw,
             )
         except urllib3.exceptions.MaxRetryError as e:
             reason = e.reason
             if isinstance(reason, urllib3.exceptions.SSLError):
-                raise TransportError(
-                    f"TLS/certificate error connecting to {self.url}: {reason}"
-                ) from None
+                raise TransportError(f"TLS/certificate error connecting to {url or self.url}: {reason}") from None
             raise TransportError(f"Connection failed: {reason}") from None
         except urllib3.exceptions.SSLError as e:
             raise TransportError(f"TLS/certificate error: {e}") from None
         except urllib3.exceptions.HTTPError as e:
             raise TransportError(f"HTTP error: {e}") from None
 
+    def post_url(self) -> str:
+        return self.url
+
     def send(self, payload: Payload, *, headers: Mapping[str, str] | None = None) -> None:
         body = json.dumps(payload, separators=(",", ":")).encode()
         if self.trace:
             trace_send(payload)
-        h = self._post_headers(payload, headers)
-        resp = self._request("POST", h, body)
+        resp = self._request("POST", self._post_headers(payload, headers), body, url=self.post_url())
         origin = "POST"
+        request_id = None
         if isinstance(payload, dict) and isinstance(payload.get("method"), str):
             origin = f"POST {payload['method']}"
-        self._handle_response(resp, origin)
+            request_id = payload.get("id")
+        self._handle_response(resp, origin, request_id)
 
     def send_bytes(self, data: bytes) -> None:
         """POST raw bytes as the body, for malformed-input testing."""
         if self.trace:
             trace_info(f"POST raw body: {sanitize(data.decode('utf-8', errors='replace'))}")
-        resp = self._request("POST", self._post_headers({}, None), data)
-        self._handle_response(resp, "POST raw")
+        resp = self._request("POST", self._post_headers({}, None), data, url=self.post_url())
+        self._handle_response(resp, "POST raw", None)
 
-    def _handle_response(self, resp: Any, origin: str) -> None:
+    def _handle_response(self, resp: Any, origin: str, request_id: Any) -> None:
         keep_open = False
         try:
             self.last_status = resp.status
             self.last_headers = dict(resp.headers)
             if self.trace:
-                ctype = resp.headers.get("Content-Type", "")
-                trace_info(f"HTTP {resp.status} {ctype}".rstrip())
+                trace_info(f"HTTP {resp.status} {resp.headers.get('Content-Type', '')}".rstrip())
             self._check_status(resp)
             new_session_id = resp.headers.get("Mcp-Session-Id")
             if new_session_id and self.wire.sessions:
@@ -229,10 +246,7 @@ class HttpTransport:
                 self._session_id = re.sub(r"[^\x21-\x7e]", "", new_session_id)
             ctype = resp.headers.get("Content-Type", "")
             if "text/event-stream" in ctype:
-                parser = SseParser(MAX_RESPONSE_BYTES)
-                self._streams.append(
-                    _Stream(resp, parser, iter_events(_iter_lines(resp), parser), origin)
-                )
+                self._start_stream(resp, origin, request_id)
                 keep_open = True
             elif "application/json" in ctype:
                 self._read_json_body(resp)
@@ -254,13 +268,12 @@ class HttpTransport:
             location = sanitize(resp.headers.get("Location", "(none)"))
             resp.read()
             raise TransportError(
-                f"Server returned redirect {status} to {location}; "
-                f"redirects are not followed for security"
+                f"Server returned redirect {status} to {location}; redirects are not followed for security"
             )
         if status < 400:
             return
         body = resp.read(64 * 1024)
-        messages: list[object] = []
+        messages: list[Any] = []
         if "json" in resp.headers.get("Content-Type", ""):
             try:
                 messages, _ = expand(json.loads(body))
@@ -272,25 +285,10 @@ class HttpTransport:
         headers = dict(resp.headers)
         if status == 404 and self._session_id:
             self._session_id = None
-            raise SessionExpiredError(
-                "Session expired (HTTP 404); re-initialize with /reconnect"
-            )
+            raise SessionExpiredError("Session expired (HTTP 404); re-initialize with /reconnect")
         preview = sanitize(repr(body[:200]))
-        if status in (401, 403):
-            raise AuthRequiredError(
-                status,
-                f"HTTP {status} from server: {preview}",
-                headers=headers,
-                body=body,
-                messages=messages,
-            )
-        raise HttpStatusError(
-            status,
-            f"HTTP {status} from server: {preview}",
-            headers=headers,
-            body=body,
-            messages=messages,
-        )
+        cls = AuthRequiredError if status in (401, 403) else HttpStatusError
+        raise cls(status, f"HTTP {status} from server: {preview}", headers=headers, body=body, messages=messages)
 
     def _read_json_body(self, resp: Any) -> None:
         data = resp.read(MAX_RESPONSE_BYTES + 1)
@@ -306,7 +304,7 @@ class HttpTransport:
             return
         self._enqueue(obj)
 
-    def _enqueue(self, obj: object) -> None:
+    def _enqueue(self, obj: Any) -> None:
         if self.trace:
             trace_recv(obj)
         items, is_batch = expand(obj)
@@ -314,70 +312,202 @@ class HttpTransport:
             self.batches_received += 1
         self._inbox.extend(items)
 
+    # ── streams ────────────────────────────────────────────────────────
+
+    def _start_stream(self, resp: Any, origin: str, request_id: Any, *, parser: SseParser | None = None,
+                      resumes: int = 0) -> Stream:
+        s = Stream(resp, parser or SseParser(MAX_RESPONSE_BYTES), origin, request_id, resumes=resumes)
+        self._streams.add(s)
+        threading.Thread(target=self._read_stream, args=(s,), daemon=True).start()
+        return s
+
+    def _read_stream(self, s: Stream) -> None:
+        """Reader thread: parse events, queue them; never prints."""
+        try:
+            for ev in iter_events(_iter_lines(s.resp), s.parser):
+                if s.abandoned:
+                    return
+                s.events += 1
+                if ev.event != "message":
+                    self._q.put(("event", s, ev))
+                    continue
+                try:
+                    obj = json.loads(ev.data)
+                except json.JSONDecodeError as e:
+                    self._q.put(("warn", s, f"Malformed JSON in SSE event: {e}; payload {ev.data[:200]!r}"))
+                    continue
+                if s.request_id is not None and isinstance(obj, dict) and obj.get("id") == s.request_id \
+                        and "method" not in obj:
+                    s.answered = True
+                self._q.put(("msg", s, obj))
+        except SseLimitExceeded as e:
+            if not s.abandoned:
+                self._q.put(("error", s, TransportError(str(e))))
+        except urllib3.exceptions.ReadTimeoutError:
+            if not s.abandoned:
+                self._q.put(("error", s, ReceiveTimeout(f"Server sent nothing for {self.timeout:g}s")))
+        except Exception as e:
+            # Closing a response from the main thread (abandon) races with
+            # http.client inside read1(), which can then raise almost
+            # anything (AttributeError on a cleared socket, ValueError, ...).
+            if not s.abandoned:
+                self._q.put(("broken", s, e))
+        finally:
+            s.done.set()
+            self._q.put(("end", s, None))
+
+    def _handle_event(self, s: Stream, ev: SseEvent) -> None:
+        """Non-"message" SSE events.  Subclasses (legacy SSE) override."""
+        if self.trace:
+            trace_info(f"SSE event {sanitize(ev.event)!r} ignored")
+
+    def _stream_ended(self, s: Stream, error: Exception | None) -> None:
+        self._streams.discard(s)
+        if s is self._get_stream:
+            self._get_stream = None
+        try:
+            s.resp.release_conn()
+        except Exception:
+            pass
+        if s.abandoned:
+            return
+        if s.parser.primed:
+            self.primed_streams += 1
+        if s.request_id is not None and not s.answered:
+            if self._can_resume(s):
+                self._resume(s)
+                return
+            if error is not None:
+                raise ConnectionClosed(f"Response stream for {s.origin} broke: {error}") from None
+            if not self._streams:
+                raise NoPendingMessages(f"Server closed the {s.origin} stream without answering")
+
+    def _can_resume(self, s: Stream) -> bool:
+        # Resumption (2025-03-26 to 2025-11-25) needs an event id to resume from.
+        return self.wire.sessions and s.parser.last_event_id is not None and s.resumes < _MAX_RESUMES
+
+    def _resume(self, s: Stream) -> None:
+        wait = min((s.parser.retry_ms or 0) / 1000, _MAX_RETRY_WAIT)
+        if self.trace:
+            trace_info(f"resuming {s.origin} stream from event {sanitize(s.parser.last_event_id or '')}"
+                       + (f" after {wait:g}s" if wait else ""))
+        if wait:
+            time.sleep(wait)
+        self.resumptions += 1
+        headers = {"Accept": "text/event-stream", **self.base_headers()}
+        headers["Last-Event-ID"] = s.parser.last_event_id or ""
+        resp = self._request("GET", headers, None)
+        try:
+            self._check_status(resp)
+        except Exception:
+            resp.release_conn()
+            raise
+        parser = SseParser(MAX_RESPONSE_BYTES)
+        parser.last_event_id = s.parser.last_event_id
+        self._start_stream(resp, s.origin + " (resumed)", s.request_id, parser=parser, resumes=s.resumes + 1)
+
     # ── receiving ──────────────────────────────────────────────────────
 
+    def _process(self, kind: str, s: Stream, item: Any) -> None:
+        if kind == "msg":
+            if not s.abandoned:
+                self._enqueue(item)
+        elif kind == "event":
+            self._handle_event(s, item)
+        elif kind == "warn":
+            eprint(red(sanitize(item)))
+        elif kind == "error":
+            self._streams.discard(s)
+            raise item
+        elif kind == "broken":
+            s.done.set()
+            self._stream_ended(s, item)
+        elif kind == "end":
+            if s in self._streams:
+                self._stream_ended(s, None)
+
     def receive(self, timeout: float | None = None) -> Any:
+        wait = self.timeout if timeout is None else timeout
+        deadline = time.monotonic() + wait
         while True:
             if self._inbox:
                 return self._inbox.popleft()
-            if not self._streams:
+            if not self._streams and self._q.empty():
                 raise NoPendingMessages("No open response stream from server")
-            self._pump(self._streams[0])
-
-    def _pump(self, stream: _Stream) -> None:
-        """Read one event from a stream into the inbox, or retire the stream."""
-        try:
-            ev = next(stream.events, None)
-        except urllib3.exceptions.ReadTimeoutError:
-            raise ReceiveTimeout(f"Server sent nothing for {self.timeout:g}s") from None
-        except SseLimitExceeded as e:
-            self._retire(stream)
-            raise TransportError(str(e)) from None
-        except (urllib3.exceptions.ProtocolError, OSError) as e:
-            self._retire(stream)
-            raise ConnectionClosed(f"Response stream broke: {e}") from None
-        if ev is None:
-            self._retire(stream)
-            return
-        if ev.event != "message":
-            if self.trace:
-                trace_info(f"SSE event {sanitize(ev.event)!r} ignored")
-            return
-        try:
-            obj = json.loads(ev.data)
-        except json.JSONDecodeError as e:
-            eprint(red(f"Malformed JSON in SSE event: {e}"))
-            eprint(red(f"  Payload: {sanitize(repr(ev.data[:200]))}"))
-            return
-        self._enqueue(obj)
-
-    def _retire(self, stream: _Stream) -> None:
-        try:
-            self._streams.remove(stream)
-        except ValueError:
-            pass
-        try:
-            stream.resp.release_conn()
-        except Exception:
-            pass
+            remaining = deadline - time.monotonic()
+            try:
+                kind, s, item = self._q.get(timeout=max(remaining, 0)) if remaining > 0 else self._q.get_nowait()
+            except queue.Empty:
+                raise ReceiveTimeout(f"Server sent nothing for {wait:g}s") from None
+            self._process(kind, s, item)
 
     def poll(self) -> list[Any]:
+        while True:
+            try:
+                kind, s, item = self._q.get_nowait()
+            except queue.Empty:
+                break
+            try:
+                self._process(kind, s, item)
+            except TransportError as e:
+                eprint(red(f"Stream error: {e}"))
         out = list(self._inbox)
         self._inbox.clear()
         return out
 
-    def has_pending(self) -> bool:
-        return bool(self._inbox or self._streams)
-
     def abandon_streams(self) -> None:
-        """Drop open response streams (after Ctrl-C or a fatal error)."""
+        """Drop open POST response streams (after Ctrl-C, a timeout, or close)."""
         for s in list(self._streams):
-            self._retire(s)
+            if s is not self._get_stream:
+                self._abandon(s)
+
+    def _abandon(self, s: Stream) -> None:
+        s.abandoned = True
+        self._streams.discard(s)
+        shutdown = getattr(s.resp, "shutdown", None)
+        try:
+            if shutdown is not None:
+                shutdown()
+            s.resp.release_conn()
+        except Exception:
+            pass
+
+    # ── GET listening stream (2025-03-26 to 2025-11-25) ────────────────
+
+    def open_listen_stream(self) -> None:
+        """Open the GET stream for unsolicited server messages; raises on 405."""
+        if self._get_stream is not None:
+            return
+        headers = {"Accept": "text/event-stream", **self.base_headers()}
+        if self.trace:
+            trace_info(f"GET {self.url} (listening stream)")
+        resp = self._request("GET", headers, None, read_timeout=None)
+        try:
+            if self.trace:
+                trace_info(f"HTTP {resp.status} {resp.headers.get('Content-Type', '')}".rstrip())
+            self._check_status(resp)
+            if "text/event-stream" not in resp.headers.get("Content-Type", ""):
+                raise TransportError("GET did not return an SSE stream")
+        except Exception:
+            resp.release_conn()
+            raise
+        self._get_stream = self._start_stream(resp, "GET", None)
+
+    def close_listen_stream(self) -> None:
+        if self._get_stream is not None:
+            self._abandon(self._get_stream)
+            self._get_stream = None
+
+    @property
+    def listening(self) -> bool:
+        return self._get_stream is not None
 
     # ── lifecycle ──────────────────────────────────────────────────────
 
     def close(self) -> None:
-        self.abandon_streams()
+        for s in list(self._streams):
+            self._abandon(s)
+        self._get_stream = None
         # Per spec (2025-03-26 to 2025-11-25), DELETE ends the session.
         if self._session_id and self.wire.sessions:
             try:
@@ -387,6 +517,7 @@ class HttpTransport:
             except Exception:
                 pass  # best-effort; we're closing anyway
         self._session_id = None
+        self._inbox.clear()
         self._pool.clear()
 
     def reconnect(self) -> None:

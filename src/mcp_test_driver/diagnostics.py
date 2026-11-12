@@ -45,8 +45,10 @@ class DiagnosticLog:
 
     items: list[Finding] = field(default_factory=list)
     _seen: set[tuple[str, str]] = field(default_factory=set)
-    # Index of the first finding not yet shown to the user.
+    # Index of the first finding not yet shown to the user, plus any later
+    # ones already printed where they happened.
     _shown: int = 0
+    _preshown: set[int] = field(default_factory=set)
 
     def add(
         self,
@@ -55,12 +57,16 @@ class DiagnosticLog:
         code: str,
         message: str,
         spec_ref: str = "",
+        *,
+        shown: bool = False,
     ) -> Finding | None:
         key = (code, message)
         if key in self._seen:
             return None
         self._seen.add(key)
         f = Finding(level, kind, code, message, spec_ref)
+        if shown:
+            self._preshown.add(len(self.items))
         self.items.append(f)
         return f
 
@@ -73,17 +79,18 @@ class DiagnosticLog:
     def deprecated(self, code: str, message: str, spec_ref: str = "") -> None:
         self.add(Level.WARNING, Kind.DEPRECATED, code, message, spec_ref)
 
-    def note(self, code: str, message: str, spec_ref: str = "") -> None:
-        self.add(Level.INFO, Kind.NOTE, code, message, spec_ref)
+    def note(self, code: str, message: str, spec_ref: str = "", *, shown: bool = False) -> None:
+        self.add(Level.INFO, Kind.NOTE, code, message, spec_ref, shown=shown)
 
     def take_unshown(self) -> list[Finding]:
-        new = self.items[self._shown :]
+        new = [f for i, f in enumerate(self.items[self._shown :], self._shown) if i not in self._preshown]
         self._shown = len(self.items)
         return new
 
     def clear(self) -> None:
         self.items.clear()
         self._seen.clear()
+        self._preshown.clear()
         self._shown = 0
 
     def __iter__(self) -> Iterator[Finding]:

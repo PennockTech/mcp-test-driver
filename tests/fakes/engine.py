@@ -11,6 +11,8 @@ mid-call server request is sent and its answer awaited:
     ("raw", text)              write raw text as a line (stdio only)
     ("exit", code)             terminate the server process
     ("sleep", seconds)
+    ("hold", sub_id)           keep a subscription stream open until the
+                               client cancels it (HTTP only; no-op on stdio)
 
 Scenario keys (all optional):
     mode            "legacy" | "modern" | "dual"         (default "legacy")
@@ -28,6 +30,9 @@ Scenario keys (all optional):
     after_initialized    [notification, ...]  sent once initialized
     batch_responses  answer with single-element batch arrays
     log_path        append every received message as a JSON line
+    omit_result_type  modern replies without resultType/serverInfo (to provoke findings)
+    listen_support  filter keys the server honours (default: all four)
+    listen_events   notifications sent on a subscriptions/listen stream
 """
 
 from __future__ import annotations
@@ -40,6 +45,7 @@ Action = tuple[str, Any]
 Handler = Generator[Action, Any, None]
 
 META = "io.modelcontextprotocol/"
+_REMOVED_IN_MODERN = {"ping", "logging/setLevel", "resources/subscribe", "resources/unsubscribe"}
 
 
 def result(req_id: Any, value: dict[str, Any]) -> dict[str, Any]:
@@ -61,7 +67,7 @@ class FakeMcp:
         self.initialized = False
         self.negotiated: str | None = None
         self._next_id = 1000
-        self._mrtr_state: dict[str, int] = {}
+        self.subscriptions: set[Any] = set()
 
     # ── helpers ────────────────────────────────────────────────────────
 
@@ -76,7 +82,7 @@ class FakeMcp:
         return self._next_id
 
     def _wrap(self, value: dict[str, Any]) -> dict[str, Any]:
-        if self.mode != "legacy" and self.negotiated is None:
+        if self.mode != "legacy" and self.negotiated is None and not self.s.get("omit_result_type"):
             value.setdefault("resultType", "complete")
             value.setdefault("_meta", {})[META + "serverInfo"] = self.server_info()
         return value
@@ -115,6 +121,12 @@ class FakeMcp:
             return  # a stray response; the adapter routes awaited ones itself
         params = msg.get("params") or {}
         if "id" not in msg:
+            if method == "notifications/cancelled":
+                sub = params.get("requestId")
+                if sub in self.subscriptions:
+                    self.subscriptions.discard(sub)
+                    yield ("send", self.listen_closed(sub))
+                return
             if method == "notifications/initialized":
                 self.initialized = True
                 for n in self.s.get("after_initialized", []):
@@ -139,6 +151,9 @@ class FakeMcp:
                 yield ("send", error(req_id, -32022, "Unsupported protocol version",
                                      {"supported": self.versions, "requested": version}))
                 return
+        if (modern_req or self.mode == "modern") and method in _REMOVED_IN_MODERN:
+            yield ("send", error(req_id, -32601, f"Method not found: {method}"))
+            return
         yield from self._method(req_id, method, params)
 
     def _initialize(self, req_id: Any, params: dict[str, Any]) -> Handler:
@@ -219,6 +234,20 @@ class FakeMcp:
             yield ("send", self.reply(req_id, {
                 "messages": [{"role": "user", "content": {"type": "text", "text": text}}]
             }))
+        elif method == "subscriptions/listen":
+            flt = params.get("notifications") or {}
+            support = self.s.get("listen_support", [
+                "toolsListChanged", "promptsListChanged", "resourcesListChanged", "resourceSubscriptions"])
+            acked = {k: v for k, v in flt.items() if k in support}
+            self.subscriptions.add(req_id)
+            tag = {META + "subscriptionId": req_id}
+            yield ("send", {"jsonrpc": "2.0", "method": "notifications/subscriptions/acknowledged",
+                            "params": {"_meta": tag, "notifications": acked}})
+            for ev in self.s.get("listen_events", []):
+                ev = json.loads(json.dumps(ev))
+                ev.setdefault("params", {}).setdefault("_meta", {}).update(tag)
+                yield ("send", ev)
+            yield ("hold", req_id)
         elif method == "completion/complete":
             values = self.s.get("completions", [])
             prefix = (params.get("argument") or {}).get("value", "")
@@ -227,6 +256,9 @@ class FakeMcp:
             }))
         else:
             yield ("send", error(req_id, -32601, f"Method not found: {method}"))
+
+    def listen_closed(self, sub: Any) -> dict[str, Any]:
+        return result(sub, self._wrap({"_meta": {META + "subscriptionId": sub}}))
 
     def _call_tool(self, req_id: Any, params: dict[str, Any]) -> Handler:
         name = params.get("name")

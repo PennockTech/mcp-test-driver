@@ -37,6 +37,8 @@ def run_actions(server: FakeMcp, gen) -> None:  # noqa: ANN001
             sys.stdout.flush()
         elif action == "sleep":
             time.sleep(arg)
+        elif action == "hold":
+            pass  # the subscription closes when notifications/cancelled arrives
         elif action == "exit":
             sys.stdout.flush()
             os._exit(arg)

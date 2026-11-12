@@ -5,6 +5,11 @@ Extra scenario keys:
     session_id       issue this Mcp-Session-Id on initialize and require it after
     status_for       {method: [status, body-json-or-null, {headers}]} canned replies
     sse_prelude      raw SSE text sent before the first event (priming, comments)
+    resumable        give SSE events ids ("<stream>-<n>") so streams can resume
+    drop_after       close a POST stream after this many events, without its
+                     response; GET with Last-Event-ID continues it
+    sse_retry_ms     send this SSE retry field before closing a dropped stream
+    get_events       accept GET: send these messages, then keep the stream open
 """
 
 from __future__ import annotations
@@ -26,6 +31,11 @@ class FakeHttpServer:
         # (method, path, headers, body) for every HTTP request received.
         self.requests: list[tuple[str, str, dict[str, str], Any]] = []
         self.lock = threading.Lock()
+        self.cancelled: dict[Any, threading.Event] = {}
+        self.parked: dict[str, Any] = {}
+        self.event_counts: dict[str, int] = {}
+        self.streams_opened = 0
+        self.stopping = threading.Event()
         handler = _make_handler(self)
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
         self.httpd.daemon_threads = True
@@ -41,6 +51,7 @@ class FakeHttpServer:
         return self
 
     def stop(self) -> None:
+        self.stopping.set()
         self.httpd.shutdown()
         self.httpd.server_close()
 
@@ -73,10 +84,76 @@ def _make_handler(server: FakeHttpServer) -> type[BaseHTTPRequestHandler]:
                 server.requests.append(("DELETE", self.path, dict(self.headers), None))
             self._send(200)
 
+        def _sse_start(self, extra: dict[str, str] | None = None) -> None:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "close")
+            for k, v in (extra or {}).items():
+                self.send_header(k, v)
+            self.end_headers()
+
+        def _event(self, obj: Any, key: str) -> None:
+            head = ""
+            if s.get("resumable"):
+                with server.lock:
+                    n = server.event_counts[key] = server.event_counts.get(key, 0) + 1
+                head = f"id: {key}-{n}\n"
+            self.wfile.write(f"{head}event: message\ndata: {json.dumps(obj)}\n\n".encode())
+            self.wfile.flush()
+
+        def _pump(self, gen: Any, key: str, drop_after: int | None = None) -> None:
+            sent = 0
+            to_send = None
+            while True:
+                try:
+                    action, arg = gen.send(to_send)
+                except StopIteration:
+                    return
+                to_send = None
+                if action == "send":
+                    self._event(arg, key)
+                    sent += 1
+                    if drop_after is not None and sent >= drop_after:
+                        server.parked[key] = gen
+                        if s.get("sse_retry_ms") is not None:
+                            self.wfile.write(f"retry: {s['sse_retry_ms']}\n\n".encode())
+                            self.wfile.flush()
+                        return
+                elif action == "await":
+                    to_send = server.responses.get(timeout=10)
+                elif action == "hold":
+                    if server.cancelled.setdefault(arg, threading.Event()).wait(timeout=30):
+                        self._event(server.mcp.listen_closed(arg), key)
+
         def do_GET(self) -> None:  # noqa: N802
             with server.lock:
                 server.requests.append(("GET", self.path, dict(self.headers), None))
-            self._send(405)
+            last = self.headers.get("Last-Event-ID")
+            if last:
+                key = last.rsplit("-", 1)[0]
+                gen = server.parked.pop(key, None)
+                if gen is None:
+                    self._send(404)
+                    return
+                self._sse_start()
+                self._pump(gen, key)
+                self.close_connection = True
+                return
+            if s.get("get_events") is None:
+                self._send(405)
+                return
+            self._sse_start()
+            for ev in s["get_events"]:
+                self._event(ev, "get")
+            # Keep the stream open until the client goes away.
+            while not server.stopping.wait(0.2):
+                try:
+                    self.wfile.write(b": keepalive\n\n")
+                    self.wfile.flush()
+                except OSError:
+                    break
+            self.close_connection = True
 
         def do_POST(self) -> None:  # noqa: N802
             length = int(self.headers.get("Content-Length", "0"))
@@ -100,6 +177,9 @@ def _make_handler(server: FakeHttpServer) -> type[BaseHTTPRequestHandler]:
                 self._send(400, json.dumps({"jsonrpc": "2.0", "error": {"code": -32600, "message": "missing session"}}).encode())
                 return
 
+            if method == "notifications/cancelled":
+                rid = (msg.get("params") or {}).get("requestId")
+                server.cancelled.setdefault(rid, threading.Event()).set()
             if isinstance(msg, dict) and "method" not in msg and ("result" in msg or "error" in msg):
                 server.mcp.log(msg)
                 server.responses.put(msg)
@@ -119,28 +199,15 @@ def _make_handler(server: FakeHttpServer) -> type[BaseHTTPRequestHandler]:
                 body = out[0] if len(out) == 1 else out
                 self._send(200, json.dumps(body).encode() if out else b"", headers=extra)
                 return
-            self.send_response(200)
-            self.send_header("Content-Type", "text/event-stream")
-            self.send_header("Cache-Control", "no-cache")
-            self.send_header("Connection", "close")
-            for k, v in extra.items():
-                self.send_header(k, v)
-            self.end_headers()
+            self._sse_start(extra)
             if s.get("sse_prelude"):
                 self.wfile.write(s["sse_prelude"].encode())
                 self.wfile.flush()
-            to_send = None
-            while True:
-                try:
-                    action, arg = gen.send(to_send)
-                except StopIteration:
-                    break
-                to_send = None
-                if action == "send":
-                    self.wfile.write(f"event: message\ndata: {json.dumps(arg)}\n\n".encode())
-                    self.wfile.flush()
-                elif action == "await":
-                    to_send = server.responses.get(timeout=10)
+            with server.lock:
+                server.streams_opened += 1
+                key = f"s{server.streams_opened}"
+            drop = s.get("drop_after") if method not in ("initialize", "server/discover") else None
+            self._pump(gen, key, drop_after=drop)
             self.close_connection = True
 
     return Handler
