@@ -67,7 +67,7 @@ def cmd_listen(repl: Repl, rest: str) -> None:
         return
     transport = session.transport
     opened = False
-    if transport.kind == "http":
+    if transport.kind == "http" and not getattr(transport, "listening", False):
         open_stream = getattr(transport, "open_listen_stream", None)
         if open_stream is not None:
             try:

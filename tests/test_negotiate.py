@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
@@ -169,19 +170,41 @@ class TestListen:
         assert srv.cancelled
         t.close()
 
-    def test_handshake_http_uses_get_stream(self, fake_http, capsys: pytest.CaptureFixture[str]) -> None:  # noqa: ANN001
+    def test_get_stream_opened_after_initialize(self, fake_http) -> None:  # noqa: ANN001
         note = {"jsonrpc": "2.0", "method": "notifications/tools/list_changed"}
         srv = fake_http({**LEGACY, "session_id": "s", "get_events": [note]})
         t = HttpTransport(srv.url, timeout=10)
         t.trace = False
         s = McpSession(t)
         connect(s, ConnectOptions(era="legacy"))
+        assert t.listening and "GET listening stream: open" in s.state.how_chosen
+        got: list[dict] = []
+        s.notification_listeners.append(got.append)
+        r = Repl(s)
+        for _ in range(40):  # the GET stream delivers asynchronously; shown while idle
+            r.before_prompt()
+            if got:
+                break
+            time.sleep(0.05)
+        assert got and got[0]["method"] == "notifications/tools/list_changed"
+        gets = [h for (m, _, h, _) in srv.requests if m == "GET"]
+        assert gets[0]["Mcp-Session-Id"] == "s"
+        r.handle_line("/listen 0.2")
+        assert t.listening  # /listen leaves an auto-opened stream alone
+        t.close()
+
+    def test_listen_opens_and_closes_get_stream(self, fake_http) -> None:  # noqa: ANN001
+        note = {"jsonrpc": "2.0", "method": "notifications/tools/list_changed"}
+        srv = fake_http({**LEGACY, "session_id": "s", "get_events": [note]})
+        t = HttpTransport(srv.url, timeout=10)
+        t.trace = False
+        s = McpSession(t)
+        connect(s, ConnectOptions(era="legacy", listen=False))
+        assert not t.listening
         r = Repl(s)
         r.handle_line("/listen 0.5")
         assert "tools" in r.cache.stale
         assert not t.listening
-        gets = [h for (m, _, h, _) in srv.requests if m == "GET"]
-        assert gets[0]["Mcp-Session-Id"] == "s"
         t.close()
 
     def test_handshake_http_405(self, fake_http, capsys: pytest.CaptureFixture[str]) -> None:  # noqa: ANN001

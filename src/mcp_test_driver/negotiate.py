@@ -31,6 +31,7 @@ from .transport import (
     HttpStatusError,
     NoPendingMessages,
     ReceiveTimeout,
+    TransportError,
 )
 
 if TYPE_CHECKING:
@@ -54,6 +55,9 @@ class ConnectOptions:
     # Revision to offer (legacy) or request (modern); None = latest of that era.
     version: str | None = None
     probe_timeout: float = DEFAULT_PROBE_TIMEOUT
+    # Handshake era over Streamable HTTP: open the GET stream after connecting,
+    # as SDK clients do, so unsolicited server messages arrive.
+    listen: bool = True
 
 
 class ModernRejected(ConnectionError):
@@ -93,12 +97,29 @@ def _initialize(session: McpSession, opts: ConnectOptions) -> None:
         )
         switch_to_legacy_sse(session)
         session.initialize(_legacy_version(opts))
+    if opts.listen and session.transport.kind == "http":
+        _open_get_stream(session)
     if session.transport.kind == "sse":
         session.findings.deprecated(
             "legacy-sse-transport",
             "server uses the HTTP+SSE transport, deprecated since 2025-03-26",
             "basic/transports#backwards-compatibility",
         )
+
+
+def _open_get_stream(session: McpSession) -> None:
+    open_stream = getattr(session.transport, "open_listen_stream", None)
+    if open_stream is None:
+        return
+    try:
+        open_stream()
+    except HttpStatusError as e:
+        session.state.how_chosen.append(f"GET listening stream: not offered (HTTP {e.status})")
+        return
+    except TransportError as e:
+        session.state.how_chosen.append(f"GET listening stream: failed ({sanitize(str(e))})")
+        return
+    session.state.how_chosen.append("GET listening stream: open")
 
 
 def switch_to_legacy_sse(session: McpSession) -> None:

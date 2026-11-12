@@ -274,3 +274,7 @@ vendored under [`specs/conformance/`](specs/conformance/).
   - `sep-2322-client-request-state`
   - about 25 `auth/*` scenarios
 - Scenarios that apply to both eras must be run once under each.
+
+mcp-test-driver passes every client scenario in both requirement lists
+(`scripts/conformance-client.sh`), and its own `--check` IDs reuse the
+suite's scenario names where they test the same behaviour.

@@ -129,6 +129,9 @@ class Repl:
         self.cache = cache if cache is not None else SessionCache.build(session)
         self.trace_enabled = session.transport.trace
         self.last_response: dict[str, Any] | None = None
+        self.last_probe: list[Any] = []
+        # Commands that failed (transport or JSON-RPC errors), for --exec.
+        self.failures = 0
         session.notification_listeners.append(self._on_notification)
 
     def _on_notification(self, msg: dict[str, Any]) -> None:
@@ -197,27 +200,36 @@ class Repl:
                 return cmd.func(self, rest) is not False
             self.invoke_tool(word, rest)
         except RequestCancelled:
-            pass
+            self.failures += 1
         except SessionExpiredError as e:
+            self.failures += 1
             print(red(f"{e}"))
         except AuthRequiredError as e:
+            self.failures += 1
             self.session.last_www_authenticate = e.www_authenticate or None
             print(red(f"{e}"))
             print(dim("Run /auth discover to see what the server expects."))
         except TransportError as e:
+            self.failures += 1
             print(red(f"Transport error: {e}"))
         except ConnectionError as e:
+            self.failures += 1
             print(red(f"Connection lost: {e}"))
         except McpError as e:
+            self.failures += 1
             render_error({"code": e.code, "message": e.message, "data": e.data})
         except ValueError as e:
+            self.failures += 1
             print(red(f"Error: {e}"))
         except Exception as e:
+            self.failures += 1
             print(red(f"Unexpected error: {type(e).__name__}: {sanitize(str(e))}"))
         return True
 
     def show(self, resp: dict[str, Any]) -> None:
         self.last_response = resp
+        if "error" in resp:
+            self.failures += 1
         render_response(resp)
 
     def refresh_readline(self) -> None:
