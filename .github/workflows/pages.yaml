@@ -1,0 +1,72 @@
+# This workflow MUST be audited with zizmor.
+# This workflow SHOULD be using pinned action refs.
+
+# Publishes site/ to GitHub Pages.  Its main job is hosting the OAuth Client
+# ID Metadata Document (site/oauth/client.json) whose URL is mcp-test-driver's
+# default OAuth client_id; authorization servers fetch it during login.
+#
+# One-time setup: repo Settings -> Pages -> Source: "GitHub Actions", and the
+# custom domain mcp-test-driver.pennock.tech (site root, so the document is at
+# /oauth/client.json).  Deploys from Actions take the custom domain from those
+# settings, not from a CNAME file, so site/ has none.
+
+name: Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - ".github/workflows/pages.yaml"
+  workflow_dispatch:
+
+permissions: {}
+
+# Never cancel a deploy part-way; let the latest one queue behind it.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+
+  build:
+    name: Build
+
+    runs-on: ubuntu-slim
+
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Validate client metadata document
+        run: python3 -c 'import json; json.load(open("site/oauth/client.json"))'
+
+      - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: site
+
+
+  deploy:
+    name: Deploy
+    needs: build
+
+    runs-on: ubuntu-slim
+
+    permissions:
+      pages: write     # to deploy to Pages
+      id-token: write  # to verify the deployment originates from this workflow
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
