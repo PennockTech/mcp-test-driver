@@ -1,10 +1,25 @@
 # mcp-test-driver
 
-Interactive REPL for testing any [MCP](https://modelcontextprotocol.io/)
-server, over stdio or HTTP.  No AI wiring, just debugging.
+Interactive REPL and diagnostic driver for any
+[MCP](https://modelcontextprotocol.io/) server, over stdio or HTTP.  No AI
+wiring, just a tool for developers building and maintaining MCP servers.
 
-Point it at a command (stdio) or a URL (HTTP) and get a prompt with
-tab-completion for tools, argument keys, and enum values.
+Point it at a command (stdio) or a URL (HTTP) and get:
+
+- a prompt with tab-completion for tools, argument keys and enum values;
+- a start-up report of the negotiated protocol revision, server identity,
+  capabilities, and conformance findings;
+- raw protocol access (`/send`, `/notify`, `/raw`) for testing anything the
+  server offers, including features beyond the revision it claims.
+
+The guiding rule: the negotiated revision decides *defaults* and how
+findings are labelled; it never hides or blocks a feature.
+
+Supported MCP revisions: 2024-11-05, 2025-03-26, 2025-06-18, 2025-11-25,
+2026-07-28.  See [docs/mcp-feature-matrix.md](docs/mcp-feature-matrix.md)
+for what each one defines and what the driver supports, and
+[docs/roadmap-multi-version.md](docs/roadmap-multi-version.md) for planned
+work.
 
 ## Usage
 
@@ -17,10 +32,20 @@ mcp-test-driver nats-lsp mcp-stdio
 # HTTP transport — pass a URL:
 mcp-test-driver https://unicode.mcp.pennock.tech/mcp
 
-# Enable roots capability (exposes cwd to the server):
-mcp-test-driver --roots aifr mcp
+# Offer an older protocol revision:
+mcp-test-driver --protocol-version 2025-03-26 my-server
+
+# Enable the roots capability:
+mcp-test-driver --roots aifr mcp                       # the current directory
 mcp-test-driver --roots=/path/to/project https://example.com/mcp
+
+# Authenticated HTTP servers (token taken from the environment, not argv):
+TOKEN=... mcp-test-driver --bearer-env TOKEN https://example.com/mcp
+mcp-test-driver --header 'X-Api-Key: abc' https://example.com/mcp
 ```
+
+Options go before the target; everything after the target is passed to the
+server command unchanged.
 
 At the prompt, type a tool name and its arguments:
 
@@ -31,130 +56,118 @@ mcp> unicode_lookup_char char=✓
 
 ## CLI Options
 
-| Option           | Description                                    |
-| ---------------- | ---------------------------------------------- |
-| `-h`, `--help`   | Show help message                              |
-| `--trace`        | Enable protocol tracing (default)              |
-| `--no-trace`     | Disable protocol tracing at startup            |
-| `--roots`        | Advertise cwd as filesystem root to the server |
-| `--roots=<path>` | Advertise a specific path as filesystem root   |
+| Option                   | Description                                                     |
+| ------------------------ | --------------------------------------------------------------- |
+| `-h`, `--help`           | Show help                                                       |
+| `--version`              | Show the version                                                |
+| `--trace` / `--no-trace` | Show (default) or hide JSON-RPC traffic at start-up             |
+| `-q`, `--quiet`          | Skip the start-up connection report                             |
+| `--protocol-version REV` | Revision to offer (default: latest handshake revision)          |
+| `--timeout SECS`         | How long to wait for a reply (default 120)                      |
+| `--roots[=PATH]`         | Advertise a filesystem root (bare `--roots`: current directory) |
+| `--transport KIND`       | Force `stdio` or `http` instead of guessing from the target     |
+| `--header 'NAME: VALUE'` | Extra HTTP header (repeatable)                                  |
+| `--bearer-env VAR`       | Send `Authorization: Bearer $VAR`                               |
+| `--insecure`             | Skip TLS certificate verification (testing only)                |
 
 ## Built-in Commands
 
 Built-in commands use the `/` prefix.  Tool names are stripped of leading
-`/` during sanitization, for namespace separation.
+`/` during sanitization, so a server cannot shadow a builtin.  `/help`
+lists everything; `/help <command>` shows usage.
 
-### Tools
+### Tools, resources, prompts
 
-| Command            | Alias | Description                 |
-| ------------------ | ----- | --------------------------- |
-| `/list`            | `/l`  | List available tools        |
-| `/describe <tool>` | `/d`  | Show full schema for a tool |
+| Command                         | Alias    | Description                                   |
+| ------------------------------- | -------- | --------------------------------------------- |
+| `/list`                         | `/l`     | List tools, with titles and behaviour hints   |
+| `/describe <tool>`              | `/d`     | A tool's full definition, incl. output schema |
+| `/resources`                    | `/lr`    | List resources                                |
+| `/templates`                    | `/lt`    | List resource templates                       |
+| `/read <uri>`                   | `/r`     | Read a resource                               |
+| `/subscribe <uri>`              | `/sub`   | Subscribe to resource updates                 |
+| `/unsubscribe <uri>`            | `/unsub` | Unsubscribe from resource updates             |
+| `/prompts`                      | `/lp`    | List prompts                                  |
+| `/prompt <name> [key=val ...]`  | `/p`     | Get a prompt                                  |
 
-### Resources
+Lists the server does not advertise are fetched on demand, with a note.
 
-| Command              | Alias    | Description                       |
-| -------------------- | -------- | --------------------------------- |
-| `/resources`         | `/lr`    | List available resources          |
-| `/templates`         | `/lt`    | List resource templates           |
-| `/read <uri>`        | `/r`     | Read a resource by URI            |
-| `/subscribe <uri>`   | `/sub`   | Subscribe to resource updates     |
-| `/unsubscribe <uri>` | `/unsub` | Unsubscribe from resource updates |
+### Server
 
-### Prompts
+| Command                                          | Alias | Description                                     |
+| ------------------------------------------------ | ----- | ----------------------------------------------- |
+| `/complete prompt\|resource <ref> <arg>=<partial>` | `/c`  | Argument completion (`completion/complete`)     |
+| `/ping`                                          |       | Ping the server                                 |
+| `/loglevel <level> [--rpc]`                      | `/ll` | Set the server log level                        |
+| `/roots [on [path] \| off \| add <path> \| remove <uri>]` |  | Show or change the roots capability   |
 
-| Command                 | Alias | Description                                    |
-| ----------------------- | ----- | ---------------------------------------------- |
-| `/prompts`              | `/lp` | List available prompts                         |
-| `/prompt <name> [args]` | `/p`  | Get a prompt (with optional key=val arguments) |
+### Protocol (raw access)
 
-### Session & Diagnostics
+| Command                   | Description                                                     |
+| ------------------------- | --------------------------------------------------------------- |
+| `/send <method> [params]` | Send any request; framing follows the negotiated revision       |
+| `/notify <method> [params]` | Send any notification                                         |
+| `/raw <text>`             | Send JSON (or deliberately invalid text) exactly as typed       |
+| `/meta key=val ...`       | Sticky `_meta` fields added to every request (`/meta clear`)    |
+| `/header Name: value`     | Sticky HTTP headers (`/header clear`)                           |
 
-| Command             | Alias | Description                                            |
-| ------------------- | ----- | ------------------------------------------------------ |
-| `/ping`             |       | Ping the server                                        |
-| `/loglevel <level>` | `/ll` | Set server log level                                   |
-| `/roots`            |       | Show roots status                                      |
-| `/roots on [path]`  |       | Enable roots capability (takes effect on `/reconnect`) |
-| `/roots off`        |       | Disable roots capability                               |
-| `/reconnect`        | `/rc` | Reconnect to the server                                |
-| `/cache-flush`      | `/cf` | Clear cached tools/resources/prompts, re-fetch         |
-| `/trace`            | `/t`  | Toggle JSON-RPC protocol tracing                       |
-| `/help`             | `/h`  | Show help (or `/help <tool>` for tool help)            |
-| `/quit`             | `/q`  | Exit                                                   |
+### Diagnostics and session
 
-Press **Tab** to complete commands, tool names, argument keys (`key=`), and
-enum values.  Press **F1** or **Esc-H** for context-sensitive help, at any
-point in a command.
+| Command           | Alias | Description                                              |
+| ----------------- | ----- | -------------------------------------------------------- |
+| `/info`           | `/i`  | Connection report: protocol, server, capabilities, findings |
+| `/findings`       | `/f`  | Conformance findings so far (`/findings clear`)          |
+| `/last`           |       | The last response as raw JSON                            |
+| `/reconnect`      | `/rc` | Reconnect and re-negotiate                               |
+| `/cache-flush`    | `/cf` | Re-fetch tools, resources and prompts                    |
+| `/trace [on\|off]` | `/t`  | Toggle JSON-RPC protocol tracing                         |
+| `/help`           | `/h`  | Help (`/help <tool>` or `/help <command>`)               |
+| `/quit`           | `/q`  | Exit                                                     |
+
+Press **Tab** to complete commands, tool names, argument keys (`key=`),
+enum values, prompt and resource names, and method names for `/send`.
+Press **F1** or **Esc-h** for context-sensitive help at any point in a line.
+
+## Conformance findings
+
+While you work, the driver notes anything worth knowing, labelled by kind:
+
+- **violation**: breaks a requirement of the revision the server claims
+  (malformed tool schemas, duplicate tool names, unmatched response IDs,
+  JSON-RPC batches after 2025-03-26, …);
+- **beyond-claimed**: a feature from a later revision, observed while the
+  server claims an older one (useful to know, not wrong);
+- **deprecated**: a feature deprecated at the claimed revision;
+- **note**: everything else, such as sending a method the revision lacks.
+
+New findings are printed before each prompt; `/findings` lists them all.
 
 ## Client Capabilities
 
 ### Roots
 
-The `--roots` flag (or `/roots on` command) advertises the
-[roots capability](https://modelcontextprotocol.io/specification/2025-03-26/client/roots)
-to the server, telling it which filesystem directories are relevant.
-
-When enabled, the client responds to `roots/list` requests from the server
-with the configured base path.  This is read-only: it hints to the server
-where to look, but the server accesses files using its own mechanisms.
+The `--roots` flag (or `/roots on`) advertises the roots capability,
+telling the server which filesystem directories are relevant.  The client
+answers `roots/list` with the configured base path, and `/roots add` /
+`/roots remove` send `notifications/roots/list_changed`.  This only hints
+to the server where to look; it grants no access.
 
 Security constraints:
 
 - All root paths are resolved to absolute canonical paths (symlinks followed)
-- Additional roots added via `RootsHandler.add_root()` must be descendants
-  of the base path (`Path.relative_to()` check prevents traversal)
-- The base path must exist at the time roots are enabled
-
-### Sampling
-
-The MCP `sampling` capability (server asks the client to generate LLM
-completions) is **not implemented**.  This is currently considered out of scope.
-
-## Protocol Coverage
-
-mcp-test-driver implements the following MCP protocol methods:
-
-| Method                      | Direction       | Notes                                             |
-| --------------------------- | --------------- | ------------------------------------------------- |
-| `initialize`                | client → server | Advertises capabilities from handler registry     |
-| `notifications/initialized` | client → server |                                                   |
-| `tools/list`                | client → server | Paginated                                         |
-| `tools/call`                | client → server |                                                   |
-| `resources/list`            | client → server | Paginated; fetched if server advertises resources |
-| `resources/templates/list`  | client → server | Paginated                                         |
-| `resources/read`            | client → server |                                                   |
-| `resources/subscribe`       | client → server |                                                   |
-| `resources/unsubscribe`     | client → server |                                                   |
-| `prompts/list`              | client → server | Paginated; fetched if server advertises prompts   |
-| `prompts/get`               | client → server |                                                   |
-| `ping`                      | both directions | Client handles server-initiated pings             |
-| `logging/setLevel`          | client → server |                                                   |
-| `completion/complete`       | client → server |                                                   |
-| `roots/list`                | server → client | When `--roots` is enabled                         |
+- Added roots must be descendants of the base path
+- The base path must exist when roots are enabled
 
 ## Known Limitations
 
-- **HTTP server-to-client requests**: Server-initiated requests (like
-  `roots/list`) over the HTTP Streamable transport require a long-lived GET
-  SSE stream, which is not yet implemented.  Server requests are fully
-  supported on the stdio transport.  The `--roots` flag still works over
-  HTTP for the initial handshake capabilities, but the server cannot
-  dynamically query roots mid-session.
+Work in progress is tracked in
+[docs/roadmap-multi-version.md](docs/roadmap-multi-version.md).
 
-- **Partial-line stdio timeout**: The `select()`-based read timeout (120s)
-  catches complete server silence, but if a server sends bytes without a
-  newline, `readline()` may still block.
-
-- **No OAuth/authentication**: The MCP spec defines OAuth 2.1 flows, but
-  as a test driver we don't implement auth.  Use `Authorization` headers
-  or environment-based credentials if needed.
-
-- **No DNS discovery**: SRV/TXT/DANE-based MCP server discovery
-  (SEP-1959) is proposed but not standardized.
-
-- **No `.well-known` metadata**: Neither OAuth resource metadata (RFC 9728)
-  nor MCP server cards (SEP-1649/1960) are fetched.
+- **2026-07-28 stateless protocol**: not yet negotiated automatically.
+- **Elicitation and sampling** requests from the server are answered with
+  "method not supported".
+- **Legacy HTTP+SSE transport** (2024-11-05): not yet supported.
+- **OAuth**: only static credentials (`--bearer-env`, `--header`).
 
 ## Installation
 
@@ -173,10 +186,15 @@ uv run mcp-test-driver <server-command...>
 
 ```sh
 uv sync --group dev
-uv run ruff check src/
+uv run ruff check
 uv run ty check
-uv run pytest tests/
+uv run pytest
 ```
+
+The tests drive real subprocess and HTTP fake servers (`tests/fakes/`)
+built from scenarios, so behaviour is checked end to end.  The protocol
+revision registry is cross-checked against the vendored upstream schemas
+in `docs/specs/`; refresh them with `scripts/fetch-specs.sh`.
 
 ## AI Disclosure
 

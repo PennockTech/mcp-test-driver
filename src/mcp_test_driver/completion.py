@@ -4,12 +4,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from dataclasses import dataclass, field
 from typing import Any, Protocol, cast
 
-from .color import bold, dim, red
-from .transport import sanitize
+from . import commands, versions
+from .sanitize import sanitize
 
 
 class ReadlineModule(Protocol):
@@ -47,93 +47,135 @@ class ReadlineModule(Protocol):
     ) -> None: ...
 
 
-# Builtin command prefix.  Tool names are stripped of this prefix during
-# sanitization so that a malicious server cannot shadow builtins.
-BUILTIN_PREFIX = "/"
-
-# Builtin command definitions: (canonical, alias, description)
-BUILTIN_COMMANDS: list[tuple[str, str, str]] = [
-    ("/help", "/h", "Show help (or /help <tool> for tool help)"),
-    ("/list", "/l", "List available tools"),
-    ("/describe", "/d", "Show full schema for a tool"),
-    ("/resources", "/lr", "List available resources"),
-    ("/templates", "/lt", "List resource templates"),
-    ("/read", "/r", "Read a resource by URI"),
-    ("/prompts", "/lp", "List available prompts"),
-    ("/prompt", "/p", "Get a prompt (with optional arguments)"),
-    ("/ping", "", "Ping the server"),
-    ("/loglevel", "/ll", "Set server log level"),
-    ("/roots", "", "Show/toggle roots capability (on [path] | off)"),
-    ("/subscribe", "/sub", "Subscribe to resource updates"),
-    ("/unsubscribe", "/unsub", "Unsubscribe from resource updates"),
-    ("/reconnect", "/rc", "Reconnect to the server"),
-    ("/cache-flush", "/cf", "Clear cached tools, re-fetch from server"),
-    ("/trace", "/t", "Toggle JSON-RPC protocol tracing"),
-    ("/quit", "/q", "Exit"),
-]
-
-BUILTIN_NAMES: set[str] = set()
-BUILTIN_ALIASES: dict[str, str] = {}  # alias → canonical
-for _canonical, _alias, _desc in BUILTIN_COMMANDS:
-    BUILTIN_NAMES.add(_canonical)
-    if _alias:
-        BUILTIN_ALIASES[_alias] = _canonical
-
-
 @dataclass
 class CompletionState:
-    """Holds derived completion data from the tools list."""
+    """Completion and help data derived from the server's tools, prompts and resources.
+
+    Every server-supplied string is sanitized here, once.  Tool names are
+    also made readline-safe (no spaces) and stripped of the builtin prefix,
+    so `display → real` maps what the user types to what the server expects.
+    """
 
     tool_names: set[str] = field(default_factory=set)
+    tool_real_names: dict[str, str] = field(default_factory=dict)
+    # Raw (unsanitized) definitions, for /describe; sanitize when printing.
+    tool_defs: dict[str, dict[str, Any]] = field(default_factory=dict)
     tool_descriptions: dict[str, str] = field(default_factory=dict)
     tool_schemas: dict[str, dict[str, Any]] = field(default_factory=dict)
     tool_args: dict[str, list[str]] = field(default_factory=dict)
     arg_enums: dict[str, list[str]] = field(default_factory=dict)
     arg_descriptions: dict[str, str] = field(default_factory=dict)
     all_first_words: set[str] = field(default_factory=set)
-    # Resources and prompts for tab-completion of /read, /prompt, etc.
     resource_uris: list[str] = field(default_factory=list)
     prompt_names: list[str] = field(default_factory=list)
+    prompt_args: dict[str, list[str]] = field(default_factory=dict)
 
     @classmethod
-    def from_tools(cls, tools: list[dict[str, Any]]) -> CompletionState:
+    def from_tools(
+        cls,
+        tools: list[dict[str, Any]],
+        *,
+        prompts: list[dict[str, Any]] | None = None,
+        resources: list[dict[str, Any]] | None = None,
+    ) -> CompletionState:
         state = cls()
         for t in tools:
-            # Sanitize all server-supplied data to prevent terminal injection
-            # and readline confusion.  Tool names must be safe for readline.
-            raw_name = str(t.get("name", ""))
-            name = sanitize(raw_name).replace(" ", "_")
-            # Strip the builtin prefix so server tools cannot shadow builtins.
-            name = name.lstrip(BUILTIN_PREFIX)
+            raw_name = t.get("name", "")
+            if not isinstance(raw_name, str):
+                continue
+            name = commands.display_tool_name(raw_name)
             if not name:
                 continue
             state.tool_names.add(name)
+            state.tool_real_names[name] = raw_name
+            state.tool_defs[name] = t
             state.tool_descriptions[name] = sanitize(str(t.get("description", "")))
             schema = t.get("inputSchema", {})
+            if not isinstance(schema, dict):
+                schema = {}
             state.tool_schemas[name] = schema
             props = schema.get("properties", {})
-            keys = sorted(sanitize(str(k)) for k in props.keys())
+            if not isinstance(props, dict):
+                props = {}
+            keys = sorted(sanitize(str(k)) for k in props)
             state.tool_args[name] = [k + "=" for k in keys if k]
             for k, v in props.items():
                 k = sanitize(str(k))
-                if not k:
+                if not k or not isinstance(v, dict):
                     continue
-                if "enum" in v:
-                    state.arg_enums[f"{name}:{k}"] = [
-                        sanitize(str(e)) for e in v["enum"]
-                    ]
+                enum = _enum_values(v)
+                if enum:
+                    state.arg_enums[f"{name}:{k}"] = enum
                 desc_parts: list[str] = []
                 if "type" in v:
                     desc_parts.append(f"type: {sanitize(str(v['type']))}")
                 if "description" in v:
                     desc_parts.append(sanitize(str(v["description"])))
-                if "enum" in v:
-                    desc_parts.append(f"enum: {v['enum']}")
+                if enum:
+                    desc_parts.append(f"enum: {', '.join(enum)}")
                 state.arg_descriptions[f"{name}:{k}"] = " | ".join(desc_parts)
-        state.all_first_words = (
-            BUILTIN_NAMES | set(BUILTIN_ALIASES.keys()) | state.tool_names
-        )
+        for p in prompts or []:
+            pname = p.get("name")
+            if not isinstance(pname, str) or not sanitize(pname):
+                continue
+            pname = sanitize(pname)
+            state.prompt_names.append(pname)
+            args = p.get("arguments")
+            if isinstance(args, list):
+                state.prompt_args[pname] = [
+                    sanitize(str(a.get("name"))) + "="
+                    for a in args
+                    if isinstance(a, dict) and a.get("name")
+                ]
+        state.resource_uris = [
+            sanitize(str(r.get("uri"))) for r in resources or [] if isinstance(r, dict) and r.get("uri")
+        ]
+        state.all_first_words = commands.all_words() | state.tool_names
         return state
+
+    def real_tool_name(self, display: str) -> str:
+        return self.tool_real_names.get(display, display)
+
+
+def _enum_values(prop: dict[str, Any]) -> list[str]:
+    """Enum choices from a property schema, including titled oneOf/anyOf forms."""
+    if isinstance(prop.get("enum"), list):
+        return [sanitize(str(e)) for e in prop["enum"]]
+    for key in ("oneOf", "anyOf"):
+        alts = prop.get(key)
+        if isinstance(alts, list) and alts and all(isinstance(a, dict) and "const" in a for a in alts):
+            return [sanitize(str(a["const"])) for a in alts]
+    items = prop.get("items")
+    if prop.get("type") == "array" and isinstance(items, dict):
+        return _enum_values(items)
+    return []
+
+
+_LOG_LEVELS = ["debug", "info", "notice", "warning", "error", "critical", "alert", "emergency"]
+
+
+def _arg_matches(cmd: commands.Command, state: CompletionState, text: str) -> list[str]:
+    match cmd.arg:
+        case commands.Arg.TOOL:
+            pool: Collection[str] = state.tool_names
+        case commands.Arg.PROMPT:
+            pool = state.prompt_names
+        case commands.Arg.RESOURCE:
+            pool = state.resource_uris
+        case commands.Arg.COMMAND:
+            pool = state.all_first_words
+        case commands.Arg.LEVEL:
+            pool = _LOG_LEVELS
+        case commands.Arg.METHOD:
+            pool = _ALL_CLIENT_METHODS
+        case _:
+            pool = []
+    return sorted({*pool, *cmd.words} if cmd.words else set(pool))
+
+
+_ALL_CLIENT_METHODS = frozenset().union(
+    *(s.client_requests | s.client_notifications for s in versions.SPECS.values())
+)
 
 
 def make_completer(state: CompletionState):  # noqa: ANN201
@@ -145,40 +187,22 @@ def make_completer(state: CompletionState):  # noqa: ANN201
             return None
         buf = rl.get_line_buffer()
         begin = rl.get_begidx()
+        before = buf[:begin].split()
 
-        if begin == 0:
+        if begin == 0 or not before:
             matches = sorted(c for c in state.all_first_words if c.startswith(text))
         else:
-            first_word = buf[:begin].split()[0] if buf[:begin].strip() else ""
-            # Resolve aliases
-            if first_word in BUILTIN_ALIASES:
-                first_word = BUILTIN_ALIASES[first_word]
-            # /describe, /help take a tool name as argument
-            if first_word in ("/describe", "/help"):
-                matches = sorted(n for n in state.tool_names if n.startswith(text))
-            elif first_word == "/prompt":
-                matches = sorted(n for n in state.prompt_names if n.startswith(text))
-            elif first_word in ("/read", "/subscribe", "/unsubscribe"):
-                matches = sorted(u for u in state.resource_uris if u.startswith(text))
-            elif first_word in state.tool_names:
-                if "=" in text:
-                    key, _, partial = text.partition("=")
-                    enum_key = f"{first_word}:{key}"
-                    if enum_key in state.arg_enums:
-                        prefix = key + "="
-                        matches = sorted(
-                            prefix + v
-                            for v in state.arg_enums[enum_key]
-                            if v.startswith(partial)
-                        )
-                    else:
-                        matches = []
+            first = before[0]
+            cmd = commands.resolve(first)
+            if cmd is not None:
+                if len(before) == 1:
+                    matches = [m for m in _arg_matches(cmd, state, text) if m.startswith(text)]
+                elif cmd.arg == commands.Arg.PROMPT and before[1] in state.prompt_args:
+                    matches = [a for a in state.prompt_args[before[1]] if a.startswith(text)]
                 else:
-                    matches = sorted(
-                        k
-                        for k in state.tool_args.get(first_word, [])
-                        if k.startswith(text)
-                    )
+                    matches = []
+            elif first in state.tool_names:
+                matches = _tool_arg_matches(state, first, text)
             else:
                 matches = []
 
@@ -187,83 +211,24 @@ def make_completer(state: CompletionState):  # noqa: ANN201
     return completer
 
 
+def _tool_arg_matches(state: CompletionState, tool: str, text: str) -> list[str]:
+    if "=" in text:
+        key, _, partial = text.partition("=")
+        enum = state.arg_enums.get(f"{tool}:{key}")
+        if not enum:
+            return []
+        return sorted(f"{key}={v}" for v in enum if v.startswith(partial))
+    return sorted(k for k in state.tool_args.get(tool, []) if k.startswith(text))
+
+
 def show_context_help(state: CompletionState) -> None:
-    """Display context-sensitive help based on current readline buffer."""
+    """Display context-sensitive help based on the current readline buffer."""
     rl = _get_readline()
     if rl is None:
         return
-    buf = rl.get_line_buffer().strip()
+    from .helptext import show_context_help_for
 
-    if not buf:
-        _show_general_help()
-        return
-
-    parts = buf.split()
-    first = parts[0]
-
-    # Resolve alias
-    if first in BUILTIN_ALIASES:
-        first = BUILTIN_ALIASES[first]
-
-    if first in BUILTIN_NAMES:
-        # Help for a builtin; if /help or /describe with a tool arg, show tool help
-        if first in ("/help", "/describe") and len(parts) > 1:
-            _show_tool_help(state, parts[1])
-        else:
-            for canonical, alias, desc in BUILTIN_COMMANDS:
-                if canonical == first:
-                    print(f"\n  {bold(canonical)} ({alias}): {desc}")
-                    break
-        return
-
-    if first in state.tool_names:
-        # If we're mid-argument (after key=), show that argument's info
-        if len(parts) > 1 and "=" in parts[-1]:
-            key = parts[-1].partition("=")[0]
-            desc_key = f"{first}:{key}"
-            if desc_key in state.arg_descriptions:
-                print(f"\n  {bold(key)}: {state.arg_descriptions[desc_key]}")
-                return
-        _show_tool_help(state, first)
-        return
-
-    print(f"\n  {red('Unknown:')} {first}")
-
-
-def _show_general_help() -> None:
-    print("\n  Built-in commands:")
-    for canonical, alias, desc in BUILTIN_COMMANDS:
-        print(f"    {bold(canonical):24s} {alias:6s}  {dim(desc)}")
-    print(f"\n  Or type a tool name — use {bold('/list')} to see available tools.")
-    print(
-        f"  Press {bold('Tab')} to complete, {bold('F1')}/{bold('Esc-h')} for help.\n"
-    )
-
-
-def _show_tool_help(state: CompletionState, name: str) -> None:
-    if name not in state.tool_names:
-        print(f"\n  {red('Unknown tool:')} {name}")
-        return
-    desc = state.tool_descriptions.get(name, "")
-    print(f"\n  {bold(name)}: {desc}")
-    schema = state.tool_schemas.get(name, {})
-    props = schema.get("properties", {})
-    required = schema.get("required", [])
-    if props:
-        print("  Arguments:")
-        for k, v in sorted(props.items()):
-            k = sanitize(str(k))
-            req = " (required)" if k in required else ""
-            typ = sanitize(str(v.get("type", "")))
-            d = sanitize(str(v.get("description", "")))
-            enum = v.get("enum")
-            line = f"    {bold(k + '='):<24s} {dim(str(typ))}{req}"
-            if d:
-                line += f"  {d}"
-            print(line)
-            if enum:
-                print(f"      values: {', '.join(sanitize(str(e)) for e in enum)}")
-    print()
+    show_context_help_for(state, rl.get_line_buffer())
 
 
 def _get_readline() -> ReadlineModule | None:

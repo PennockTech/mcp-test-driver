@@ -126,6 +126,9 @@ class HandlerRegistry:
         """Check if a handler is registered for the given method."""
         return method in self._handlers
 
+    def get(self, method: str) -> ClientHandler | None:
+        return self._handlers.get(method)
+
     def dispatch(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
         """Dispatch a server request to the registered handler.
 

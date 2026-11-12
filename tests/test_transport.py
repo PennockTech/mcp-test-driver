@@ -1,368 +1,309 @@
 # Copyright 2026 Phil Pennock — see LICENSE file.
 
-"""Tests for transport layer."""
+"""Tests for the stdio and Streamable HTTP transports and the SSE parser."""
 
 from __future__ import annotations
 
-import io
 import json
-import subprocess
-from unittest.mock import MagicMock, patch
+import sys
+from typing import Any
 
 import pytest
 
 from mcp_test_driver.transport import (
+    ConnectionClosed,
+    HttpStatusError,
     HttpTransport,
+    NoPendingMessages,
+    ReceiveTimeout,
     StdioTransport,
     TransportError,
-    _frame,
+    encode_header_value,
 )
+from mcp_test_driver.transport.sse import SseParser, iter_events
+from mcp_test_driver.transport.stdio import _frame
+
+
+def _req(i: int, method: str = "ping", params: dict | None = None) -> dict[str, Any]:
+    m: dict[str, Any] = {"jsonrpc": "2.0", "id": i, "method": method}
+    if params is not None:
+        m["params"] = params
+    return m
+
+
+def _python(code: str) -> list[str]:
+    return [sys.executable, "-c", code]
 
 
 class TestFrame:
-    """Tests for the _frame helper."""
+    def test_compact_newline_terminated(self) -> None:
+        assert _frame({"a": 1, "b": [1, 2]}) == b'{"a":1,"b":[1,2]}\n'
 
-    def test_basic_frame(self) -> None:
-        result = _frame({"jsonrpc": "2.0", "id": 1})
-        assert result.endswith(b"\n")
-        parsed = json.loads(result)
-        assert parsed == {"jsonrpc": "2.0", "id": 1}
-
-    def test_compact_encoding(self) -> None:
-        result = _frame({"a": 1, "b": 2})
-        # Should use compact separators (no spaces)
-        assert b": " not in result
-        assert b", " not in result
-
-    def test_utf8_encoding(self) -> None:
-        result = _frame({"char": "✓"})
-        # json.dumps escapes non-ASCII to \uXXXX by default
-        parsed = json.loads(result)
-        assert parsed["char"] == "✓"
+    def test_utf8(self) -> None:
+        out = _frame({"c": "✓"})
+        assert out.endswith(b"\n")
+        assert json.loads(out)["c"] == "✓"
 
 
 class TestStdioTransport:
-    """Tests for StdioTransport."""
+    def _start(self, fake_stdio, scenario: dict) -> StdioTransport:  # noqa: ANN001
+        t = StdioTransport(fake_stdio(scenario), timeout=10)
+        t.trace = False
+        return t
 
-    def _make_transport(self, responses: list[dict]) -> StdioTransport:
-        """Create a StdioTransport with a mocked subprocess."""
-        response_lines = b"".join(
-            json.dumps(r, separators=(",", ":")).encode() + b"\n" for r in responses
-        )
-        mock_stdout = io.BytesIO(response_lines)
-        mock_stdin = io.BytesIO()
+    def test_round_trip(self, fake_stdio) -> None:  # noqa: ANN001
+        t = self._start(fake_stdio, {"mode": "legacy"})
+        t.send(_req(1, "initialize", {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "x", "version": "1"}}))
+        msg = t.receive()
+        assert msg["id"] == 1 and msg["result"]["protocolVersion"] == "2025-11-25"
+        t.close()
 
-        mock_proc = MagicMock(spec=subprocess.Popen)
-        mock_proc.stdin = mock_stdin
-        mock_proc.stdout = mock_stdout
-        mock_proc.stderr = None
-        mock_proc.wait = MagicMock()
+    def test_eof_raises_connection_closed(self) -> None:
+        t = StdioTransport(_python("pass"), timeout=5)
+        t.trace = False
+        with pytest.raises(ConnectionClosed, match="exit status 0"):
+            t.receive()
+        t.close()
 
-        with patch("subprocess.Popen", return_value=mock_proc):
-            transport = StdioTransport(["fake-cmd"])
+    def test_timeout_even_on_partial_line(self) -> None:
+        # A server that writes half a message and stalls must not hang us.
+        code = "import sys,time; sys.stdout.write('{\"jsonrpc\"'); sys.stdout.flush(); time.sleep(30)"
+        t = StdioTransport(_python(code), timeout=0.5)
+        t.trace = False
+        with pytest.raises(ReceiveTimeout):
+            t.receive()
+        t.close()
 
-        transport.trace = False
-        return transport
+    def test_final_message_without_newline_delivered(self) -> None:
+        code = "import sys; sys.stdout.write('{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}')"
+        t = StdioTransport(_python(code), timeout=5)
+        t.trace = False
+        assert t.receive()["id"] == 1
+        t.close()
 
-    def test_request_sends_and_receives(self) -> None:
-        transport = self._make_transport([{"jsonrpc": "2.0", "id": 1, "result": {}}])
-        resp = transport.request({"jsonrpc": "2.0", "id": 1, "method": "test"})
-        assert resp is not None
-        assert resp["id"] == 1
+    def test_malformed_json_skipped(self, capsys: pytest.CaptureFixture[str]) -> None:
+        code = "print('not json'); print('{\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{}}')"
+        t = StdioTransport(_python(code), timeout=5)
+        t.trace = False
+        assert t.receive()["id"] == 7
+        assert "Malformed JSON" in capsys.readouterr().err
+        t.close()
 
-    def test_request_returns_none_on_eof(self) -> None:
-        transport = self._make_transport([])
-        resp = transport.request({"jsonrpc": "2.0", "id": 1, "method": "test"})
-        assert resp is None
+    def test_batch_expanded(self) -> None:
+        code = "print('[{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}},{\"jsonrpc\":\"2.0\",\"method\":\"n\"}]')"
+        t = StdioTransport(_python(code), timeout=5)
+        t.trace = False
+        assert t.receive()["id"] == 1
+        assert t.receive()["method"] == "n"
+        assert t.batches_received == 1
+        t.close()
 
-    def test_notify_does_not_read(self) -> None:
-        transport = self._make_transport([])
-        # notify should not try to read a response
-        transport.notify({"jsonrpc": "2.0", "method": "notifications/test"})
+    def test_poll_does_not_block(self) -> None:
+        t = StdioTransport(_python("import time; time.sleep(30)"), timeout=5)
+        t.trace = False
+        assert t.poll() == []
+        t.close()
 
-    def test_close_cleans_up(self) -> None:
-        transport = self._make_transport([])
-        proc = transport._proc
-        assert proc is not None
-        transport.close()
-        assert transport._proc is None
-        proc.wait.assert_called_once()  # type: ignore[union-attr]
+    def test_stderr_is_sanitized_and_printed_by_caller(self, capsys: pytest.CaptureFixture[str]) -> None:
+        code = "import sys; sys.stderr.write('\\x1b[31mhello\\n'); sys.stderr.flush()"
+        t = StdioTransport(_python(code), timeout=5)
+        t.trace = False
+        with pytest.raises(ConnectionClosed):
+            t.receive()
+        err = capsys.readouterr().err
+        assert "[server stderr] hello" in err
+        assert "\x1b[31m" not in err
+        t.close()
 
-    def test_close_idempotent(self) -> None:
-        transport = self._make_transport([])
-        transport.close()
-        transport.close()  # should not raise
+    def test_command_not_found(self) -> None:
+        with pytest.raises(TransportError, match="Command not found"):
+            StdioTransport(["/nonexistent/mcp-server-xyz"])
 
-    def test_reconnect_relaunches(self) -> None:
-        transport = self._make_transport([])
-        transport.trace = False
-        old_proc = transport._proc
+    def test_send_after_exit(self) -> None:
+        t = StdioTransport(_python("pass"), timeout=5)
+        t.trace = False
+        t._proc.wait()  # type: ignore[union-attr]
+        with pytest.raises((ConnectionClosed, TransportError)):
+            for _ in range(50):  # the pipe may buffer the first writes
+                t.send(_req(1))
+        t.close()
 
-        new_proc = MagicMock()
-        new_proc.stdin = io.BytesIO()
-        new_proc.stdout = io.BytesIO()
-        new_proc.wait = MagicMock()
+    def test_close_idempotent_and_reconnect(self, fake_stdio) -> None:  # noqa: ANN001
+        t = self._start(fake_stdio, {})
+        first = t.pid
+        t.reconnect()
+        assert t.pid is not None and t.pid != first
+        t.close()
+        t.close()
 
-        with patch("mcp_test_driver.transport.subprocess.Popen", return_value=new_proc):
-            transport.reconnect()
+    def test_trace(self, fake_stdio, capsys: pytest.CaptureFixture[str]) -> None:  # noqa: ANN001
+        t = self._start(fake_stdio, {"mode": "legacy", "on_unknown_pre_init": "error"})
+        t.trace = True
+        t.send(_req(1, "tools/list"))
+        t.receive()
+        err = capsys.readouterr().err
+        assert ">>>" in err and "<<<" in err
+        t.close()
 
-        assert transport._proc is not None
-        assert transport._proc is not old_proc
 
-    def test_trace_on_sends_to_stderr(self, capsys: pytest.CaptureFixture) -> None:  # type: ignore[type-arg]
-        transport = self._make_transport([{"jsonrpc": "2.0", "id": 1, "result": {}}])
-        transport.trace = True
-        transport.request({"jsonrpc": "2.0", "id": 1, "method": "test"})
-        captured = capsys.readouterr()
-        assert ">>>" in captured.err
-        assert "<<<" in captured.err
+class TestSseParser:
+    def _events(self, raw: bytes) -> tuple[list, SseParser]:
+        parser = SseParser(1 << 20)
+        return list(iter_events(raw.splitlines(keepends=True), parser)), parser
 
-    def test_trace_off_no_stderr(self, capsys: pytest.CaptureFixture) -> None:  # type: ignore[type-arg]
-        transport = self._make_transport([{"jsonrpc": "2.0", "id": 1, "result": {}}])
-        transport.trace = False
-        transport.request({"jsonrpc": "2.0", "id": 1, "method": "test"})
-        captured = capsys.readouterr()
-        assert ">>>" not in captured.err
-        assert "<<<" not in captured.err
+    def test_single_event(self) -> None:
+        evs, _ = self._events(b"event: message\ndata: {\"a\":1}\n\n")
+        assert [(e.event, e.data) for e in evs] == [("message", '{"a":1}')]
+
+    def test_default_event_type_and_no_space(self) -> None:
+        evs, _ = self._events(b"data:{\"a\":1}\n\n")
+        assert evs[0].event == "message" and evs[0].data == '{"a":1}'
+
+    def test_multiline_data(self) -> None:
+        evs, _ = self._events(b"data: {\"a\":\ndata: 1}\n\n")
+        assert json.loads(evs[0].data) == {"a": 1}
+
+    def test_comments_ignored(self) -> None:
+        evs, _ = self._events(b": keepalive\n\ndata: x\n\n")
+        assert [e.data for e in evs] == ["x"]
+
+    def test_priming_event_sets_id_without_dispatch(self) -> None:
+        evs, p = self._events(b"id: abc\ndata:\n\nretry: 1500\n\n")
+        assert evs == []
+        assert p.primed and p.last_event_id == "abc" and p.retry_ms == 1500
+
+    def test_priming_does_not_leak_into_next_event(self) -> None:
+        evs, _ = self._events(b"id: p\ndata:\n\ndata: real\n\n")
+        assert [e.data for e in evs] == ["real"]
+
+    def test_ids_persist(self) -> None:
+        evs, p = self._events(b"id: 1\ndata: a\n\ndata: b\n\n")
+        assert evs[0].id == "1" and evs[1].id is None and p.last_event_id == "1"
+
+    def test_trailing_event_without_blank_line(self) -> None:
+        evs, _ = self._events(b"data: tail")
+        assert [e.data for e in evs] == ["tail"]
+
+    def test_crlf(self) -> None:
+        evs, _ = self._events(b"data: x\r\n\r\n")
+        assert evs[0].data == "x"
 
 
 class TestHttpTransport:
-    """Tests for HttpTransport."""
+    def _t(self, srv) -> HttpTransport:  # noqa: ANN001
+        t = HttpTransport(srv.url, timeout=10)
+        t.trace = False
+        return t
 
-    def _make_transport(self) -> HttpTransport:
-        transport = HttpTransport("https://example.com/mcp")
-        transport.trace = False
-        return transport
+    def _init(self, version: str = "2025-11-25") -> dict:
+        return _req(1, "initialize", {"protocolVersion": version, "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}})
 
-    def test_headers_without_session(self) -> None:
-        transport = self._make_transport()
-        headers = transport._headers()
-        assert headers["Content-Type"] == "application/json"
-        assert "Accept" in headers
-        assert "Mcp-Session-Id" not in headers
+    def test_json_response(self, fake_http) -> None:  # noqa: ANN001
+        t = self._t(fake_http({}))
+        t.send(self._init())
+        assert t.receive()["result"]["serverInfo"]["name"] == "fake-server"
 
-    def test_headers_with_session(self) -> None:
-        transport = self._make_transport()
-        transport._session_id = "test-session-123"
-        headers = transport._headers()
-        assert headers["Mcp-Session-Id"] == "test-session-123"
+    def test_sse_response_carries_all_messages(self, fake_http) -> None:  # noqa: ANN001
+        notify = {"jsonrpc": "2.0", "method": "notifications/progress", "params": {"progressToken": 1, "progress": 1}}
+        srv = fake_http({
+            "http_mode": "sse",
+            "tools": [{"name": "t", "inputSchema": {"type": "object"}}],
+            "tool_scripts": {"t": [{"notify": notify}, {"reply": {"content": []}}]},
+        })
+        t = self._t(srv)
+        t.send(self._init())
+        t.receive()
+        t.send(_req(2, "tools/call", {"name": "t"}))
+        assert t.receive()["method"] == "notifications/progress"
+        assert t.receive()["id"] == 2
+        with pytest.raises(NoPendingMessages):
+            t.receive()
 
-    def test_request_json_response(self) -> None:
-        transport = self._make_transport()
-        response_body = json.dumps(
-            {"jsonrpc": "2.0", "id": 1, "result": {"ok": True}}
-        ).encode()
+    def test_server_request_answered_mid_stream(self, fake_http) -> None:  # noqa: ANN001
+        srv = fake_http({
+            "http_mode": "sse",
+            "tool_scripts": {"t": [{"request": {"method": "roots/list"}}, {"reply": {}}]},
+        })
+        t = self._t(srv)
+        t.send(self._init())
+        t.receive()
+        t.send(_req(2, "tools/call", {"name": "t"}))
+        req = t.receive()
+        assert req["method"] == "roots/list"
+        t.send({"jsonrpc": "2.0", "id": req["id"], "result": {"roots": []}})
+        resp = t.receive()
+        assert resp["id"] == 2
+        assert json.loads(resp["result"]["content"][0]["text"])[0]["result"] == {"roots": []}
 
-        mock_resp = MagicMock()
-        mock_resp.headers = {
-            "Content-Type": "application/json",
-        }
-        mock_resp.status = 200
-        mock_resp.read.return_value = response_body
-        mock_resp.release_conn = MagicMock()
+    def test_session_id_round_trip_and_delete(self, fake_http) -> None:  # noqa: ANN001
+        srv = fake_http({"session_id": "abc123"})
+        t = self._t(srv)
+        t.send(self._init())
+        t.receive()
+        assert t.session_id == "abc123"
+        t.send(_req(2, "tools/list"))
+        t.receive()
+        assert srv.headers_for("tools/list")[0]["Mcp-Session-Id"] == "abc123"
+        t.close()
+        assert any(m == "DELETE" for (m, *_) in srv.requests)
 
-        transport._pool = MagicMock()
-        transport._pool.request.return_value = mock_resp
+    def test_notification_202(self, fake_http) -> None:  # noqa: ANN001
+        t = self._t(fake_http({}))
+        t.send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+        assert t.last_status == 202
+        assert t.poll() == []
 
-        result = transport.request({"jsonrpc": "2.0", "id": 1, "method": "test"})
-        assert result is not None
-        assert result["result"]["ok"] is True
+    def test_wire_headers(self, fake_http) -> None:  # noqa: ANN001
+        srv = fake_http({"tools": [{"name": "café tool", "inputSchema": {"type": "object"}}]})
+        t = self._t(srv)
+        t.send(self._init())
+        t.receive()
+        t.wire.protocol_version = "2026-07-28"
+        t.wire.version_header = True
+        t.wire.method_headers = True
+        t.send(_req(2, "tools/call", {"name": "café tool"}))
+        t.receive()
+        h = srv.headers_for("tools/call")[0]
+        assert h["MCP-Protocol-Version"] == "2026-07-28"
+        assert h["Mcp-Method"] == "tools/call"
+        assert h["Mcp-Name"] == encode_header_value("café tool")
+        assert h["Mcp-Name"].startswith("=?base64?")
 
-    def test_request_captures_session_id(self) -> None:
-        transport = self._make_transport()
-        response_body = json.dumps({"jsonrpc": "2.0", "id": 1, "result": {}}).encode()
+    def test_error_status_keeps_jsonrpc_body(self, fake_http) -> None:  # noqa: ANN001
+        body = {"jsonrpc": "2.0", "id": 1, "error": {"code": -32022, "message": "Unsupported"}}
+        t = self._t(fake_http({"status_for": {"server/discover": [400, body, {}]}}))
+        with pytest.raises(HttpStatusError) as ei:
+            t.send(_req(1, "server/discover"))
+        assert ei.value.status == 400
+        assert ei.value.messages[0]["error"]["code"] == -32022
 
-        mock_resp = MagicMock()
-        mock_resp.headers = {
-            "Content-Type": "application/json",
-            "Mcp-Session-Id": "new-session-456",
-        }
-        mock_resp.status = 200
-        mock_resp.read.return_value = response_body
-        mock_resp.release_conn = MagicMock()
+    def test_extra_and_authorization_headers(self, fake_http) -> None:  # noqa: ANN001
+        srv = fake_http({})
+        t = HttpTransport(srv.url, extra_headers={"X-Test": "1"})
+        t.trace = False
+        t.authorization = "Bearer s3cret"
+        t.send(self._init())
+        t.receive()
+        h = srv.headers_for("initialize")[0]
+        assert h["X-Test"] == "1" and h["Authorization"] == "Bearer s3cret"
 
-        transport._pool = MagicMock()
-        transport._pool.request.return_value = mock_resp
+    def test_header_injection_rejected(self) -> None:
+        with pytest.raises(ValueError):
+            HttpTransport("http://127.0.0.1:1/mcp", extra_headers={"X": "a\r\nInjected: 1"})
 
-        transport.request({"jsonrpc": "2.0", "id": 1, "method": "test"})
-        assert transport._session_id == "new-session-456"
-
-    def test_notify_202_accepted(self) -> None:
-        transport = self._make_transport()
-
-        mock_resp = MagicMock()
-        mock_resp.headers = {"Content-Type": ""}
-        mock_resp.status = 202
-        mock_resp.read.return_value = b""
-        mock_resp.release_conn = MagicMock()
-
-        transport._pool = MagicMock()
-        transport._pool.request.return_value = mock_resp
-
-        transport.notify({"jsonrpc": "2.0", "method": "notifications/test"})
-
-    def test_reconnect_clears_session(self) -> None:
-        transport = self._make_transport()
-        transport._session_id = "old-session"
-        transport.reconnect()
-        assert transport._session_id is None
-
-    def test_parse_sse_single_event(self) -> None:
-        transport = self._make_transport()
-        sse_data = [
-            b'data: {"jsonrpc":"2.0","id":1,"result":{"ok":true}}\r\n',
-            b"\r\n",
-        ]
-        result = transport._parse_sse(iter(sse_data))
-        assert result is not None
-        assert result["result"]["ok"] is True
-
-    def test_parse_sse_multiple_events(self) -> None:
-        transport = self._make_transport()
-        sse_data = [
-            b'data: {"jsonrpc":"2.0","method":"progress"}\r\n',
-            b"\r\n",
-            b'data: {"jsonrpc":"2.0","id":1,"result":{"done":true}}\r\n',
-            b"\r\n",
-        ]
-        result = transport._parse_sse(iter(sse_data))
-        assert result is not None
-        # Returns the last message
-        assert result["result"]["done"] is True
-
-    def test_parse_sse_multiline_data(self) -> None:
-        transport = self._make_transport()
-        sse_data = [
-            b"data: {\r\n",
-            b'data: "jsonrpc":"2.0","id":1,"result":{}\r\n',
-            b"data: }\r\n",
-            b"\r\n",
-        ]
-        result = transport._parse_sse(iter(sse_data))
-        assert result is not None
-
-    def test_parse_sse_ignores_comments(self) -> None:
-        transport = self._make_transport()
-        sse_data = [
-            b": this is a comment\r\n",
-            b'data: {"jsonrpc":"2.0","id":1,"result":{}}\r\n',
-            b"\r\n",
-        ]
-        result = transport._parse_sse(iter(sse_data))
-        assert result is not None
-
-    def test_parse_sse_empty_stream(self) -> None:
-        transport = self._make_transport()
-        result = transport._parse_sse(iter([]))
-        assert result is None
-
-    def test_unexpected_content_type_raises(self) -> None:
-        transport = self._make_transport()
-
-        mock_resp = MagicMock()
-        mock_resp.headers = {"Content-Type": "text/html"}
-        mock_resp.status = 200
-        mock_resp.read.return_value = b"<html>error</html>"
-        mock_resp.release_conn = MagicMock()
-
-        transport._pool = MagicMock()
-        transport._pool.request.return_value = mock_resp
-
-        with pytest.raises(TransportError, match="Unexpected Content-Type"):
-            transport.request({"jsonrpc": "2.0", "id": 1, "method": "test"})
-
-
-class TestStdioTransportRobustness:
-    """Tests for error handling in StdioTransport."""
-
-    def test_command_not_found_raises_transport_error(self) -> None:
-        with pytest.raises(TransportError, match="Command not found"):
-            StdioTransport(["/nonexistent/binary/xyz"])
-
-    def test_broken_pipe_raises_transport_error(self) -> None:
-        mock_stdin = MagicMock()
-        mock_stdin.write.side_effect = BrokenPipeError()
-        mock_stdout = io.BytesIO()
-
-        mock_proc = MagicMock()
-        mock_proc.stdin = mock_stdin
-        mock_proc.stdout = mock_stdout
-        mock_proc.wait = MagicMock()
-
-        with patch(
-            "mcp_test_driver.transport.subprocess.Popen", return_value=mock_proc
-        ):
-            transport = StdioTransport(["fake"])
-
-        transport.trace = False
-        with pytest.raises(TransportError, match="Server process has exited"):
-            transport.request({"jsonrpc": "2.0", "id": 1, "method": "test"})
-
-    def test_malformed_json_returns_none(self) -> None:
-        mock_stdout = io.BytesIO(b"not json at all\n")
-        mock_stdin = io.BytesIO()
-
-        mock_proc = MagicMock()
-        mock_proc.stdin = mock_stdin
-        mock_proc.stdout = mock_stdout
-        mock_proc.wait = MagicMock()
-
-        with patch(
-            "mcp_test_driver.transport.subprocess.Popen", return_value=mock_proc
-        ):
-            transport = StdioTransport(["fake"])
-
-        transport.trace = False
-        result = transport.request({"jsonrpc": "2.0", "id": 1, "method": "test"})
-        assert result is None
-
-    def test_send_after_close_raises(self) -> None:
-        mock_proc = MagicMock()
-        mock_proc.stdin = io.BytesIO()
-        mock_proc.stdout = io.BytesIO()
-        mock_proc.wait = MagicMock()
-
-        with patch(
-            "mcp_test_driver.transport.subprocess.Popen", return_value=mock_proc
-        ):
-            transport = StdioTransport(["fake"])
-
-        transport.trace = False
-        transport.close()
-        with pytest.raises(TransportError, match="Not connected"):
-            transport.request({"jsonrpc": "2.0", "id": 1, "method": "test"})
-
-
-class TestHttpTransportRobustness:
-    """Tests for error handling in HttpTransport."""
-
-    def test_connection_failure_raises_transport_error(self) -> None:
-        import urllib3.exceptions
-
-        transport = HttpTransport("https://localhost:1/nonexistent")
-        transport.trace = False
-        transport._pool = MagicMock()
-        transport._pool.request.side_effect = urllib3.exceptions.MaxRetryError(
-            pool=None,
-            url="/",
-            reason=Exception("Connection refused"),  # type: ignore[arg-type]
-        )
-
+    def test_connection_failure(self) -> None:
+        t = HttpTransport("http://127.0.0.1:1/mcp", timeout=2)
+        t.trace = False
         with pytest.raises(TransportError, match="Connection failed"):
-            transport.request({"jsonrpc": "2.0", "id": 1, "method": "test"})
+            t.send(_req(1))
 
-    def test_malformed_json_response_returns_none(self) -> None:
-        transport = HttpTransport("https://example.com/mcp")
-        transport.trace = False
 
-        mock_resp = MagicMock()
-        mock_resp.headers = {"Content-Type": "application/json"}
-        mock_resp.status = 200
-        mock_resp.read.return_value = b"not json"
-        mock_resp.release_conn = MagicMock()
+class TestHeaderEncoding:
+    def test_plain_ascii_unchanged(self) -> None:
+        assert encode_header_value("get_weather") == "get_weather"
+        assert encode_header_value("file:///a/b.json") == "file:///a/b.json"
 
-        transport._pool = MagicMock()
-        transport._pool.request.return_value = mock_resp
-
-        result = transport.request({"jsonrpc": "2.0", "id": 1, "method": "test"})
-        assert result is None
+    def test_non_ascii_and_sentinel_lookalikes_encoded(self) -> None:
+        assert encode_header_value("naïve").startswith("=?base64?")
+        assert encode_header_value("=?base64?abc?=").startswith("=?base64?")
+        assert encode_header_value(" padded").startswith("=?base64?")
