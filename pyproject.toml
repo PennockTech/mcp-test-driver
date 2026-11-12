@@ -1,7 +1,7 @@
 [project]
 name = "mcp-test-driver"
 version = "0.1.2"
-description = "Interactive REPL for testing any MCP server over stdio or HTTP"
+description = "Interactive REPL and conformance diagnostics for MCP servers, over stdio or HTTP"
 readme = "README.md"
 license = "ISC"
 authors = [
@@ -26,6 +26,7 @@ dependencies = [
 ]
 
 [project.urls]
+homepage = "https://mcp-test-driver.pennock.tech/"
 repository = "https://github.com/PennockTech/mcp-test-driver"
 issues = "https://github.com/PennockTech/mcp-test-driver/issues"
 
