@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from .base import (
     DEFAULT_TIMEOUT,
+    AuthProvider,
     MAX_LINE_BYTES,
     MAX_RESPONSE_BYTES,
     AuthRequiredError,
@@ -26,6 +27,7 @@ from .stdio import StdioTransport
 
 __all__ = [
     "DEFAULT_TIMEOUT",
+    "AuthProvider",
     "MAX_LINE_BYTES",
     "MAX_RESPONSE_BYTES",
     "AuthRequiredError",

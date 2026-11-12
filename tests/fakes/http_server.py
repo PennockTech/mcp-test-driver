@@ -16,6 +16,8 @@ Extra scenario keys:
     require_bearer   reject requests without "Authorization: Bearer <this>" (401)
     www_authenticate the WWW-Authenticate header sent with that 401
     documents        {path: json} served on GET (metadata, server cards)
+    oauth            run a fake authorization server (see auth_server.py) and
+                     require its tokens on the MCP endpoint
 """
 
 from __future__ import annotations
@@ -26,6 +28,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
+from .auth_server import FakeAuth
 from .engine import FakeMcp
 
 
@@ -47,11 +50,16 @@ class FakeHttpServer:
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
         self.httpd.daemon_threads = True
         self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
+        self.auth = FakeAuth(scenario["oauth"], self.origin) if "oauth" in scenario else None
+
+    @property
+    def origin(self) -> str:
+        host, port = self.httpd.server_address[:2]
+        return f"http://{host}:{port}"
 
     @property
     def url(self) -> str:
-        host, port = self.httpd.server_address[:2]
-        return f"http://{host}:{port}/mcp"
+        return f"{self.origin}/mcp"
 
     def start(self) -> FakeHttpServer:
         self.thread.start()
@@ -133,7 +141,14 @@ def _make_handler(server: FakeHttpServer) -> type[BaseHTTPRequestHandler]:
                     if server.cancelled.setdefault(arg, threading.Event()).wait(timeout=30):
                         self._event(server.mcp.listen_closed(arg), key)
 
-        def _unauthorized(self) -> bool:
+        def _unauthorized(self, body: Any = None) -> bool:
+            if server.auth is not None:
+                denied = server.auth.check(dict(self.headers), body)
+                if denied:
+                    status, challenge = denied
+                    self._send(status, b'{"error":"unauthorized"}', headers={"WWW-Authenticate": challenge})
+                    return True
+                return False
             token = s.get("require_bearer")
             if token and self.headers.get("Authorization") != f"Bearer {token}":
                 headers = {"WWW-Authenticate": s["www_authenticate"]} if s.get("www_authenticate") else {}
@@ -182,7 +197,18 @@ def _make_handler(server: FakeHttpServer) -> type[BaseHTTPRequestHandler]:
         def do_GET(self) -> None:  # noqa: N802
             with server.lock:
                 server.requests.append(("GET", self.path, dict(self.headers), None))
-            path = self.path.split("?", 1)[0]
+            path, _, query = self.path.partition("?")
+            if server.auth is not None:
+                got = server.auth.get(path, query)
+                if got is not None:
+                    status, headers, body = got
+                    self.send_response(status)
+                    for k, v in headers.items():
+                        self.send_header(k, v)
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
             if path in s.get("documents", {}):
                 self._send(200, json.dumps(s["documents"][path]).encode())
                 return
@@ -223,6 +249,14 @@ def _make_handler(server: FakeHttpServer) -> type[BaseHTTPRequestHandler]:
         def do_POST(self) -> None:  # noqa: N802
             length = int(self.headers.get("Content-Length", "0"))
             raw = self.rfile.read(length)
+            if server.auth is not None and self.path.split("?", 1)[0] != "/mcp":
+                got = server.auth.post(self.path.split("?", 1)[0], raw, dict(self.headers))
+                if got is None:
+                    self._send(404)
+                    return
+                status, headers, body = got
+                self._send(status, body, ctype=headers.get("Content-Type", "application/json"))
+                return
             try:
                 msg = json.loads(raw)
             except json.JSONDecodeError:
@@ -230,7 +264,7 @@ def _make_handler(server: FakeHttpServer) -> type[BaseHTTPRequestHandler]:
             with server.lock:
                 server.requests.append(("POST", self.path, dict(self.headers), msg))
             method = msg.get("method") if isinstance(msg, dict) else None
-            if self._unauthorized():
+            if self._unauthorized(msg):
                 return
             if s.get("legacy_sse"):
                 if self.path.split("?", 1)[0] == "/mcp":

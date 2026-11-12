@@ -71,6 +71,10 @@ mcp> unicode_lookup_char char=✓
 | `--sampling`             | Answer sampling requests yourself (you play the LLM)            |
 | `--progress`             | Attach progress tokens to calls                                 |
 | `--otel`                 | Send a fresh OpenTelemetry `traceparent` with each request      |
+| `--oauth`                | Log in with OAuth when the server asks (see Authorization)     |
+| `--auth-flow FLOW`       | `code` (default), `client-credentials` or `device`             |
+| `--client-id`, `--client-secret-env`, `--client-metadata-url` | OAuth client identity |
+| `--callback-port`, `--browser`, `--scope`, `--token-cache` | OAuth login options     |
 | `--transport KIND`       | Force `stdio`, `http` (Streamable HTTP) or `sse` (2024-11-05 HTTP+SSE) |
 | `--header 'NAME: VALUE'` | Extra HTTP header (repeatable)                                  |
 | `--bearer-env VAR`       | Send `Authorization: Bearer $VAR`                               |
@@ -158,7 +162,7 @@ Capability changes reach handshake-era servers after `/reconnect`.
 | `/findings`       | `/f`  | Conformance findings so far (`/findings clear`)          |
 | `/last`           |       | The last response as raw JSON                            |
 | `/server-card [url]` |     | Fetch the Server Card and AI Catalog; compare with the live server |
-| `/auth discover`  |       | OAuth discovery chain and checks for this server         |
+| `/auth [discover\|login\|status\|refresh\|logout]` | | OAuth discovery, login and token management |
 | `/reconnect`      | `/rc` | Reconnect and re-negotiate                               |
 | `/cache-flush`    | `/cf` | Re-fetch tools, resources and prompts                    |
 | `/trace [on\|off]` | `/t`  | Toggle JSON-RPC protocol tracing                         |
@@ -237,23 +241,50 @@ wiring up a model.
 
 ## Authorization
 
-Static credentials: `--bearer-env VAR` (the token stays out of argv) or
-`--header`.  When a server answers 401/403, the driver shows the OAuth
-discovery chain it would follow: the `WWW-Authenticate` challenge,
-Protected Resource Metadata (RFC 9728, from the header or the well-known
-URIs), and authorization-server metadata (RFC 8414 / OpenID Connect, in
-the spec's order), with findings for anything missing or inconsistent
-(no PKCE S256, issuer or resource mismatch, ...).  `/auth discover` runs
-the same chain from the REPL.  Metadata fetches are GET-only, never follow
-redirects, and require HTTPS except to loopback hosts.
+**Static credentials:** `--bearer-env VAR` (the token stays out of argv)
+or `--header`.
+
+**OAuth login** (`--oauth`, or `/auth login` in the REPL): when the server
+answers 401, the driver follows the MCP authorization spec end to end and
+retries the request with the new token:
+
+1. Discovery: the `WWW-Authenticate` challenge, Protected Resource Metadata
+   (RFC 9728, from the header or the well-known URIs), and
+   authorization-server metadata (RFC 8414 / OpenID Connect, in the spec's
+   order).  `/auth discover` shows this chain on its own.
+2. Client registration, in the spec's priority order: a pre-registered
+   `--client-id` (with `--client-secret-env` for confidential clients,
+   `client_secret_basic` or `client_secret_post` as the AS supports), our
+   published [Client ID Metadata Document](site/oauth/client.json), or
+   Dynamic Client Registration.
+3. Authorization code with PKCE (S256) and a loopback redirect on
+   `127.0.0.1` (port 33418 if free, else any; `--callback-port`).  The
+   authorization URL is printed (`--browser` opens it); if your browser is
+   on another machine, paste the final redirect URL at the prompt instead.
+   Resource indicators (RFC 8707) go on every request, `iss` is validated
+   (RFC 9207), and scope follows the spec: the challenge's, else the
+   server's `scopes_supported`, plus `offline_access` when offered.
+4. Afterwards: expired tokens are refreshed, and a 403 with
+   `insufficient_scope` triggers step-up re-authorization (with a retry
+   limit).
+
+Other flows: `--auth-flow client-credentials` (machine-to-machine, needs
+`--client-id` and `--client-secret-env`) and `--auth-flow device` (RFC 8628,
+for headless machines, when the AS offers it).  `--token-cache PATH` keeps
+credentials between runs (mode 0600, keyed by server and issuer).
+`/auth status`, `/auth refresh` and `/auth logout` manage the session.
+
+Everything unusual becomes a finding.  The driver refuses to continue only
+where continuing would leak credentials: protected-resource metadata
+naming a different resource, or an `iss` that doesn't match the issuer.
+Metadata fetches are GET-only, never follow redirects, and require HTTPS
+except to loopback hosts.
 
 ## Known Limitations
 
 Work in progress is tracked in
 [docs/roadmap-multi-version.md](docs/roadmap-multi-version.md).
 
-- **OAuth login**: discovery and diagnostics only so far; tokens must be
-  supplied (`--bearer-env`).
 
 ## Installation
 

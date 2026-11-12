@@ -90,6 +90,23 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--insecure", action="store_true",
                    help="do not verify TLS certificates (testing only)")
 
+    g = p.add_argument_group("OAuth (HTTP)")
+    g.add_argument("--oauth", action="store_true",
+                   help="log in with OAuth when the server asks (authorization code + PKCE)")
+    g.add_argument("--auth-flow", choices=("code", "client-credentials", "device"),
+                   help="OAuth flow to use (implies --oauth)")
+    g.add_argument("--client-id", metavar="ID", help="pre-registered OAuth client ID")
+    g.add_argument("--client-secret-env", metavar="VAR", help="environment variable holding the client secret")
+    g.add_argument("--client-metadata-url", metavar="URL",
+                   help="Client ID Metadata Document URL to use instead of ours")
+    g.add_argument("--callback-port", type=int, metavar="PORT",
+                   help="loopback port for the OAuth redirect (default 33418, else any free port)")
+    g.add_argument("--browser", action="store_true", help="open the authorization URL in a browser")
+    g.add_argument("--scope", action="append", metavar="SCOPE",
+                   help="request this scope instead of the server's (repeatable)")
+    g.add_argument("--token-cache", type=Path, metavar="PATH",
+                   help="keep OAuth credentials in this file (mode 0600), keyed by server")
+
     p.add_argument("target", nargs=argparse.REMAINDER,
                    help="server command and its arguments, or an http(s) URL")
     return p
@@ -211,6 +228,12 @@ def run_session(transport: Transport, args: argparse.Namespace, holder: list[Tra
         if args.sampling:
             session.enable_sampling(prompter)
     session.progress = args.progress
+    if args.oauth or args.auth_flow or args.client_id:
+        try:
+            attach_oauth(session, args)
+        except ValueError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
     session.otel = args.otel
     try:
         try:
@@ -243,6 +266,33 @@ def run_session(transport: Transport, args: argparse.Namespace, holder: list[Tra
     repl.run()
 
 
+def attach_oauth(session: McpSession, args: argparse.Namespace) -> None:
+    from .fetch import JsonFetcher
+    from .oauth import OAuthClient, OAuthOptions
+
+    transport = session.transport
+    url = getattr(transport, "url", None)
+    if url is None or not hasattr(transport, "auth"):
+        raise ValueError("OAuth applies to HTTP servers only")
+    secret = None
+    if args.client_secret_env:
+        secret = os.environ.get(args.client_secret_env)
+        if not secret:
+            raise ValueError(f"environment variable {args.client_secret_env} is empty or unset")
+    options = OAuthOptions(
+        flow=args.auth_flow or "code",
+        client_id=args.client_id,
+        client_secret=secret,
+        client_metadata_url=args.client_metadata_url,
+        callback_port=args.callback_port,
+        browser=args.browser,
+        token_cache=args.token_cache,
+        scopes=args.scope,
+    )
+    setattr(transport, "auth", OAuthClient(url, options, session.findings,
+                                           fetcher=JsonFetcher(verify_tls=not args.insecure)))
+
+
 def report_auth(session: McpSession, err: AuthRequiredError) -> None:
     """On 401/403 at start-up, show the OAuth discovery chain."""
     from .auth_diag import describe, discover
@@ -259,4 +309,5 @@ def report_auth(session: McpSession, err: AuthRequiredError) -> None:
     for line in describe(disc):
         print(f"  {line}", file=sys.stderr)
     print_findings(session.findings.take_unshown())
-    print("Use --bearer-env VAR (or --header) to supply a token.", file=sys.stderr)
+    if getattr(session.transport, "auth", None) is None:
+        print("Use --oauth to log in, or --bearer-env VAR to supply a token.", file=sys.stderr)

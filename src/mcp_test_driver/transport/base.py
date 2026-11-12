@@ -90,6 +90,16 @@ class WireProfile:
     extra_headers: dict[str, str] = field(default_factory=dict)
 
 
+class AuthProvider(Protocol):
+    """Supplies and renews the Authorization header for HTTP transports."""
+
+    def current_header(self) -> str | None: ...
+
+    def handle_challenge(self, status: int, www_authenticate: str | None, attempt: int) -> str | None:
+        """A new Authorization header after a 401/403, or None to give up."""
+        ...
+
+
 class Transport(Protocol):
     """A bidirectional JSON-RPC message pipe.
 
