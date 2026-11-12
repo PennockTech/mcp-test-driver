@@ -57,8 +57,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     g = p.add_argument_group("protocol")
     g.add_argument("--protocol-version", metavar="REV",
-                   help=f"revision to offer/request (default: {versions.LATEST_HANDSHAKE} "
-                   f"for initialize, {versions.LATEST_MODERN} for modern requests)")
+                   help=f"revision to offer or request (default: {versions.LATEST_MODERN} for "
+                   f"stateless requests, {versions.LATEST_HANDSHAKE} for initialize)")
+    g.add_argument("--era", choices=("auto", "legacy", "modern"), default="auto",
+                   help="auto (default): probe with server/discover, falling back to initialize; "
+                   "legacy: initialize handshake only; modern: stateless (2026-07-28+) only")
+    g.add_argument("--probe-timeout", type=float, default=5.0, metavar="SECS",
+                   help="how long --era auto waits for a server/discover reply (default 5)")
     g.add_argument("--timeout", type=float, default=None, metavar="SECS",
                    help="how long to wait for a reply (default 120)")
     g.add_argument("--roots", type=Path, metavar="PATH",
@@ -200,7 +205,8 @@ def run_session(transport: Transport, args: argparse.Namespace) -> None:
             session.enable_sampling(prompter)
     session.progress = args.progress
     try:
-        connect(session, ConnectOptions(era="legacy", version=args.protocol_version))
+        connect(session, ConnectOptions(era=args.era, version=args.protocol_version,
+                                    probe_timeout=args.probe_timeout))
     except TransportError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)

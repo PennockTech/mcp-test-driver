@@ -122,3 +122,11 @@ def test_print_report(capsys: pytest.CaptureFixture[str]) -> None:
     assert "srv 1  (Server)" in out
     assert "more line(s)" in out
     assert "counter-offered" in out
+
+
+def test_preshown_findings_not_repeated() -> None:
+    log = DiagnosticLog()
+    log.note("a", "printed already", shown=True)
+    log.note("b", "new")
+    assert [f.code for f in log.take_unshown()] == ["b"]
+    assert len(log) == 2

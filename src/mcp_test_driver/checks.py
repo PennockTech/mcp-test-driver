@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from . import versions
 from .diagnostics import DiagnosticLog, Level
 from .sanitize import sanitize_any
+from .transport.params import analyse as analyse_header_params
 from .versions import Feature, SpecVersion
 
 if TYPE_CHECKING:
@@ -107,6 +108,16 @@ def check_tools(log: DiagnosticLog, spec: SpecVersion, tools: list[dict[str, Any
                 "server/tools",
                 level=Level.WARNING,
             )
+        if isinstance(schema, dict):
+            hp = analyse_header_params(schema)
+            if hp.paths or hp.problems:
+                _beyond(log, spec, Feature.METHOD_HEADERS, f"tool {shown!r} x-mcp-header")
+            for problem in hp.problems:
+                log.violation(
+                    "tool-x-mcp-header",
+                    f"tool {shown!r}: {sanitize_any(problem)}; a conforming HTTP client must drop this tool",
+                    "basic/transports/streamable-http#custom-headers-from-tool-parameters",
+                )
         if "annotations" in t:
             _beyond(log, spec, Feature.TOOL_ANNOTATIONS, f"tool {shown!r} annotations")
         if "outputSchema" in t:

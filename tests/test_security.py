@@ -192,14 +192,13 @@ class TestHttpBodySizeLimit:
             for _ in range(100):
                 parser.feed(b"data: " + b"x" * 100 + b"\n")
 
-    def test_oversized_sse_stream_via_transport(self) -> None:
+    def test_oversized_sse_stream_via_transport(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("mcp_test_driver.transport.http.MAX_RESPONSE_BYTES", 4096)
         body = (b"data: " + b"x" * 1024 + b"\n") * 20
         t, _ = _http(MockResp(200, {"Content-Type": "text/event-stream"}, body))
         t.send(REQ)
-        stream = t._streams[0]
-        stream.parser._max = 4096
         with pytest.raises(TransportError, match="exceeds"):
-            t.receive()
+            t.receive(timeout=5)
 
 
 class TestSessionIdSanitization:

@@ -307,3 +307,92 @@ class TestHeaderEncoding:
         assert encode_header_value("naïve").startswith("=?base64?")
         assert encode_header_value("=?base64?abc?=").startswith("=?base64?")
         assert encode_header_value(" padded").startswith("=?base64?")
+
+
+class TestHttpStreams:
+    def _init(self, t: HttpTransport) -> None:
+        t.send(_req(1, "initialize", {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}))
+        t.receive()
+
+    def _scenario(self, **extra: Any) -> dict:
+        note = {"jsonrpc": "2.0", "method": "notifications/progress", "params": {"progressToken": 1, "progress": 1}}
+        return {
+            "http_mode": "sse", "session_id": "sess", "resumable": True,
+            "tools": [{"name": "t", "inputSchema": {"type": "object"}}],
+            "tool_scripts": {"t": [{"notify": note}, {"notify": note}, {"reply": {"content": []}}]},
+            **extra,
+        }
+
+    def test_resumes_with_last_event_id(self, fake_http) -> None:  # noqa: ANN001
+        srv = fake_http(self._scenario(drop_after=1, sse_retry_ms=10))
+        t = HttpTransport(srv.url, timeout=10)
+        t.trace = False
+        self._init(t)
+        t.send(_req(2, "tools/call", {"name": "t"}))
+        assert t.receive()["method"] == "notifications/progress"
+        assert t.receive()["method"] == "notifications/progress"
+        assert t.receive()["id"] == 2
+        gets = [h for (m, _, h, _) in srv.requests if m == "GET"]
+        # Stream s1 carried initialize; s2 is the tools/call stream.
+        assert gets and gets[0]["Last-Event-ID"] == "s2-1"
+        assert gets[0]["Mcp-Session-Id"] == "sess"
+        assert t.resumptions == 1
+        t.close()
+
+    def test_no_resume_without_event_ids(self, fake_http) -> None:  # noqa: ANN001
+        srv = fake_http(self._scenario(drop_after=1, resumable=False))
+        t = HttpTransport(srv.url, timeout=10)
+        t.trace = False
+        self._init(t)
+        t.send(_req(2, "tools/call", {"name": "t"}))
+        t.receive()
+        with pytest.raises(NoPendingMessages, match="without answering"):
+            t.receive()
+        t.close()
+
+    def test_no_resume_in_stateless_era(self, fake_http) -> None:  # noqa: ANN001
+        srv = fake_http(self._scenario(drop_after=1, session_id=None))
+        t = HttpTransport(srv.url, timeout=10)
+        t.trace = False
+        self._init(t)
+        t.wire.sessions = False
+        t.send(_req(2, "tools/call", {"name": "t"}))
+        t.receive()
+        with pytest.raises(NoPendingMessages):
+            t.receive()
+        t.close()
+
+    def test_priming_event_counted(self, fake_http) -> None:  # noqa: ANN001
+        srv = fake_http(self._scenario(sse_prelude="id: p-0\ndata:\n\n"))
+        t = HttpTransport(srv.url, timeout=10)
+        t.trace = False
+        self._init(t)
+        t.send(_req(2, "tools/call", {"name": "t"}))
+        while t.receive().get("id") != 2:
+            pass
+        with pytest.raises((NoPendingMessages, ReceiveTimeout)):
+            t.receive(timeout=1)
+        assert t.primed_streams == 2  # the prelude primes both streams
+        t.close()
+
+    def test_get_listening_stream(self, fake_http) -> None:  # noqa: ANN001
+        note = {"jsonrpc": "2.0", "method": "notifications/resources/updated", "params": {"uri": "x"}}
+        srv = fake_http({**self._scenario(), "get_events": [note]})
+        t = HttpTransport(srv.url, timeout=10)
+        t.trace = False
+        self._init(t)
+        t.open_listen_stream()
+        assert t.listening
+        assert t.receive(timeout=5)["method"] == "notifications/resources/updated"
+        with pytest.raises(ReceiveTimeout):
+            t.receive(timeout=0.3)
+        t.close_listen_stream()
+        assert not t.listening
+        t.close()
+
+    def test_get_405(self, fake_http) -> None:  # noqa: ANN001
+        t = HttpTransport(fake_http({}).url, timeout=10)
+        t.trace = False
+        with pytest.raises(HttpStatusError) as ei:
+            t.open_listen_stream()
+        assert ei.value.status == 405

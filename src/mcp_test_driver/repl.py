@@ -21,6 +21,8 @@ from .protocol import McpError, RequestCancelled
 from .render import render_error, render_response
 from .sanitize import sanitize
 from .transport import SessionExpiredError, TransportError
+from .transport.params import param_headers
+from .versions import Feature
 
 if TYPE_CHECKING:
     from .protocol import McpSession
@@ -233,5 +235,8 @@ class Repl:
         except (json.JSONDecodeError, ValueError) as exc:
             print(red(f"Could not parse arguments: {exc}"))
             return
-        resp = self.session.call_tool(state.real_tool_name(name), arguments)
+        headers = None
+        if self.session.transport.kind == "http" and self.session.spec.has(Feature.METHOD_HEADERS):
+            headers = param_headers(state.tool_schemas.get(name, {}), arguments) or None
+        resp = self.session.call_tool(state.real_tool_name(name), arguments, headers=headers)
         self.show(resp)

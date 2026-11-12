@@ -69,44 +69,44 @@ Source: `2026-07-28/basic/versioning` (backward compatibility),
 | ✗ | removed |
 | D | deprecated (still works; slated for removal under SEP-2596) |
 
-The **Today** column describes mcp-test-driver 0.1.2.
+The **Driver** column says what mcp-test-driver does with each feature; "—" means not (yet) supported.
 
 ## JSON-RPC methods and notifications
 
 Generated from the vendored `schema.json` files.  Direction: C→S is
 client to server, S→C is server to client.
 
-| Method | Dir | 2024-11-05 | 2025-03-26 | 2025-06-18 | 2025-11-25 | 2026-07-28 | Today |
+| Method | Dir | 2024-11-05 | 2025-03-26 | 2025-06-18 | 2025-11-25 | 2026-07-28 | Driver |
 |---|---|---|---|---|---|---|---|
-| `initialize` | C→S | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ |
+| `initialize` | C→S | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ offers 2025-11-25 by default (`--protocol-version`) |
 | `notifications/initialized` | C→S | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ |
-| `server/discover` | C→S | — | — | — | — | **new** | — |
-| `ping` | both | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ (both directions) |
-| `notifications/cancelled` | both | ✓ | ✓ | ✓ | ✓ | ✓ | — |
-| `notifications/progress` | both | ✓ | ✓ | ✓ | ✓ | ✓ | displayed |
+| `server/discover` | C→S | — | — | — | — | **new** | ✓ start-up probe (`--era auto`); `/discover` |
+| `ping` | both | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ both directions |
+| `notifications/cancelled` | both | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ sent on Ctrl-C and timeout; displayed |
+| `notifications/progress` | both | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ displayed; `/progress` attaches tokens |
 | `tools/list` | C→S | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `tools/call` | C→S | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `notifications/tools/list_changed` | S→C | ✓ | ✓ | ✓ | ✓ | ✓ | displayed |
+| `notifications/tools/list_changed` | S→C | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ refreshes the cache |
 | `resources/list` | C→S | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `resources/templates/list` | C→S | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `resources/read` | C→S | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `resources/subscribe` | C→S | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ |
 | `resources/unsubscribe` | C→S | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ |
-| `notifications/resources/list_changed` | S→C | ✓ | ✓ | ✓ | ✓ | ✓ | displayed |
-| `notifications/resources/updated` | S→C | ✓ | ✓ | ✓ | ✓ | ✓ | displayed |
+| `notifications/resources/list_changed` | S→C | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ refreshes the cache |
+| `notifications/resources/updated` | S→C | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ displayed |
 | `prompts/list` | C→S | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `prompts/get` | C→S | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `notifications/prompts/list_changed` | S→C | ✓ | ✓ | ✓ | ✓ | ✓ | displayed |
-| `completion/complete` | C→S | ✓ | ✓ | ✓ | ✓ | ✓ | API only; buggy for `ref/resource` |
-| `logging/setLevel` | C→S | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ |
-| `notifications/message` | S→C | ✓ | ✓ | ✓ | ✓ | ✓ (D) | displayed |
-| `subscriptions/listen` | C→S | — | — | — | — | **new** | — |
-| `notifications/subscriptions/acknowledged` | S→C | — | — | — | — | **new** | — |
-| `roots/list` | S→C | ✓ | ✓ | ✓ | ✓ | ✓ in MRTR (D) | ✓ (stdio only) |
-| `notifications/roots/list_changed` | C→S | ✓ | ✓ | ✓ | ✓ | ✗ | advertised, never sent |
-| `sampling/createMessage` | S→C | ✓ | ✓ | ✓ | ✓ | ✓ in MRTR (D) | — |
-| `elicitation/create` | S→C | — | — | **new** | ✓ | ✓ in MRTR | — |
-| `notifications/elicitation/complete` | S→C | — | — | — | **new** | ✗ | — |
+| `notifications/prompts/list_changed` | S→C | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ refreshes the cache |
+| `completion/complete` | C→S | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ `/complete` |
+| `logging/setLevel` | C→S | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ `/loglevel` (`--rpc` forces it in 2026-07-28) |
+| `notifications/message` | S→C | ✓ | ✓ | ✓ | ✓ | ✓ (D) | ✓ displayed by level |
+| `subscriptions/listen` | C→S | — | — | — | — | **new** | ✓ `/listen` |
+| `notifications/subscriptions/acknowledged` | S→C | — | — | — | — | **new** | ✓ checked against the request |
+| `roots/list` | S→C | ✓ | ✓ | ✓ | ✓ | ✓ in MRTR (D) | ✓ requests and MRTR |
+| `notifications/roots/list_changed` | C→S | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ `/roots add` / `/roots remove` |
+| `sampling/createMessage` | S→C | ✓ | ✓ | ✓ | ✓ | ✓ in MRTR (D) | ✓ human-in-the-loop (`--sampling`) |
+| `elicitation/create` | S→C | — | — | **new** | ✓ | ✓ in MRTR | ✓ interactive (`--elicitation`) |
+| `notifications/elicitation/complete` | S→C | — | — | — | **new** | ✗ | ✓ displayed |
 | `tasks/get` | both | — | — | — | **new** | moved to extension | — |
 | `tasks/result` | both | — | — | — | **new** | ✗ | — |
 | `tasks/list` | both | — | — | — | **new** | ✗ | — |
@@ -126,22 +126,22 @@ return unsolicited task handles.
 
 ## Lifecycle and envelope
 
-| Feature | 2024-11-05 | 2025-03-26 | 2025-06-18 | 2025-11-25 | 2026-07-28 | Today |
+| Feature | 2024-11-05 | 2025-03-26 | 2025-06-18 | 2025-11-25 | 2026-07-28 | Driver |
 |---|---|---|---|---|---|---|
-| Version negotiation | `initialize` | `initialize` | `initialize`; lifecycle rules become MUST | `initialize` | per request, in `_meta`; `server/discover`; `UnsupportedProtocolVersion` error lists the supported versions | offers 2024-11-05 only; warns on mismatch |
-| Per-request `_meta` keys `io.modelcontextprotocol/{protocolVersion, clientCapabilities}` (required) and `{clientInfo, logLevel}` (optional) | — | — | — | — | **new** | — |
-| `io.modelcontextprotocol/serverInfo` in result `_meta` | — | — | — | — | **new** (SHOULD) | — |
-| `resultType` (`complete` / `input_required`) on every result | — | — | — | — | **new**; treat absent as `complete` | — |
-| JSON-RPC batching | — | **new** (MUST receive) | ✗ | ✗ | ✗ | — |
-| `_meta` key naming rules (reserved `*.modelcontextprotocol/` and `*.mcp/` prefixes) | — | — | **new** | ✓ | ✓ | n/a |
-| OpenTelemetry `traceparent` / `tracestate` / `baggage` in `_meta` (SEP-414) | — | — | — | — | **new** | — |
-| `CacheableResult` (`ttlMs`, `cacheScope`) on list and read results | — | — | — | — | **new** (required) | — |
-| `Implementation.title` | — | — | **new** | ✓ | ✓ | — |
-| `Implementation.icons`, `description`, `websiteUrl` | — | — | — | **new** | ✓ | — |
-| `instructions` | ✓ | ✓ | ✓ | ✓ | in `DiscoverResult` | ignored |
-| `capabilities.extensions` | — | — | — | — | **new** | — |
-| `progressToken`; progress `message` | token | + `message` | ✓ | ✓ | ✓ | displayed only |
-| `notifications/cancelled.requestId` | required | required | required | optional | ✓ | — |
+| Version negotiation | `initialize` | `initialize` | `initialize`; lifecycle rules become MUST | `initialize` | per request, in `_meta`; `server/discover`; `UnsupportedProtocolVersion` error lists the supported versions | ✓ dual-era: `server/discover` probe, then `initialize`; counter-offers, aliases, `--era` |
+| Per-request `_meta` keys `io.modelcontextprotocol/{protocolVersion, clientCapabilities}` (required) and `{clientInfo, logLevel}` (optional) | — | — | — | — | **new** | ✓ |
+| `io.modelcontextprotocol/serverInfo` in result `_meta` | — | — | — | — | **new** (SHOULD) | ✓ read; absence noted |
+| `resultType` (`complete` / `input_required`) on every result | — | — | — | — | **new**; treat absent as `complete` | ✓ checked; MRTR loop on `input_required` |
+| JSON-RPC batching | — | **new** (MUST receive) | ✗ | ✗ | ✗ | ✓ received (stdio, HTTP); `/raw` sends; flagged outside 2025-03-26 |
+| `_meta` key naming rules (reserved `*.modelcontextprotocol/` and `*.mcp/` prefixes) | — | — | **new** | ✓ | ✓ | `/meta` sets any key |
+| OpenTelemetry `traceparent` / `tracestate` / `baggage` in `_meta` (SEP-414) | — | — | — | — | **new** | `/meta` |
+| `CacheableResult` (`ttlMs`, `cacheScope`) on list and read results | — | — | — | — | **new** (required) | ✓ shown and checked |
+| `Implementation.title` | — | — | **new** | ✓ | ✓ | ✓ shown |
+| `Implementation.icons`, `description`, `websiteUrl` | — | — | — | **new** | ✓ | ✓ shown |
+| `instructions` | ✓ | ✓ | ✓ | ✓ | in `DiscoverResult` | ✓ start-up report |
+| `capabilities.extensions` | — | — | — | — | **new** | ✓ shown in the report |
+| `progressToken`; progress `message` | token | + `message` | ✓ | ✓ | ✓ | ✓ `/progress`, `--progress` |
+| `notifications/cancelled.requestId` | required | required | required | optional | ✓ | ✓ always sent |
 | Pagination (`cursor` / `nextCursor`) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ (100-page cap) |
 
 ### Error codes
@@ -175,61 +175,61 @@ return unsolicited task handles.
 
 ## Server features
 
-| Feature | 2024-11-05 | 2025-03-26 | 2025-06-18 | 2025-11-25 | 2026-07-28 | Today |
+| Feature | 2024-11-05 | 2025-03-26 | 2025-06-18 | 2025-11-25 | 2026-07-28 | Driver |
 |---|---|---|---|---|---|---|
-| Tool `annotations` (readOnly, destructive, idempotent and openWorld hints, `title`) | — | **new** | ✓ | ✓ | ✓ | not shown |
-| Tool `title`, `outputSchema`; result `structuredContent` | — | — | **new** | ✓ | ✓; any JSON Schema 2020-12 keyword / any JSON value | ignored |
-| `_meta` on Tool, Resource, Prompt and content | — | — | **new** | ✓ | ✓ | ignored |
-| Tool name format (1–128 characters, `[A-Za-z0-9_.-]`, SEP-986) | — | — | — | **new** (SHOULD) | ✓ | sanitized only |
-| Input validation errors returned as tool errors (`isError`, SEP-1303) | — | — | — | **new** | ✓ | n/a |
-| Tool / Resource / Prompt `icons` | — | — | — | **new** | ✓ | — |
-| Tool `execution.taskSupport` | — | — | — | **new** | ✗ (extension) | — |
+| Tool `annotations` (readOnly, destructive, idempotent and openWorld hints, `title`) | — | **new** | ✓ | ✓ | ✓ | ✓ `/list`, `/describe` |
+| Tool `title`, `outputSchema`; result `structuredContent` | — | — | **new** | ✓ | ✓; any JSON Schema 2020-12 keyword / any JSON value | ✓ shown |
+| `_meta` on Tool, Resource, Prompt and content | — | — | **new** | ✓ | ✓ | ✓ shown |
+| Tool name format (1–128 characters, `[A-Za-z0-9_.-]`, SEP-986) | — | — | — | **new** (SHOULD) | ✓ | ✓ checked; real names kept |
+| Input validation errors returned as tool errors (`isError`, SEP-1303) | — | — | — | **new** | ✓ | ✓ shown |
+| Tool / Resource / Prompt `icons` | — | — | — | **new** | ✓ | ✓ counted |
+| Tool `execution.taskSupport` | — | — | — | **new** | ✗ (extension) | ✓ `/describe` |
 | Default JSON Schema dialect 2020-12 (SEP-1613) | — | — | — | **new** | ✓ | n/a |
-| `x-mcp-header` tool params mapped to HTTP headers (SEP-2243) | — | — | — | — | **new** | — |
+| `x-mcp-header` tool params mapped to HTTP headers (SEP-2243) | — | — | — | — | **new** | ✓ sent; invalid annotations flagged (tool kept) |
 | Deterministic `tools/list` order | — | — | — | — | **new** (SHOULD) | n/a |
-| Annotations: `audience`, `priority` | ✓ | ✓ | + `lastModified` | ✓ | ✓ | — |
-| `completion/complete` | ✓ | ✓ (+ capability) | + `context.arguments` | ✓ | ✓ | no REPL command; `ref/resource` sends `name`, but the spec says `uri` |
-| Log level | `logging/setLevel` | ✓ | ✓ | ✓ | per request, `_meta` `logLevel` | `/loglevel` |
-| Change notifications | unsolicited | unsolicited | unsolicited | unsolicited | opt in via `subscriptions/listen` | displayed; cache not refreshed |
+| Annotations: `audience`, `priority` | ✓ | ✓ | + `lastModified` | ✓ | ✓ | ✓ shown |
+| `completion/complete` | ✓ | ✓ (+ capability) | + `context.arguments` | ✓ | ✓ | ✓ `/complete` |
+| Log level | `logging/setLevel` | ✓ | ✓ | ✓ | per request, `_meta` `logLevel` | ✓ `/loglevel` |
+| Change notifications | unsolicited | unsolicited | unsolicited | unsolicited | opt in via `subscriptions/listen` | ✓ cache refresh; `/listen` |
 
 ### Content block types
 
-| Type | 2024-11-05 | 2025-03-26 | 2025-06-18 | 2025-11-25 | 2026-07-28 | Today |
+| Type | 2024-11-05 | 2025-03-26 | 2025-06-18 | 2025-11-25 | 2026-07-28 | Driver |
 |---|---|---|---|---|---|---|
-| `text` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ (not sanitized) |
-| `image` | ✓ | ✓ | ✓ | ✓ | ✓ | prints empty text |
-| `resource` (embedded) | ✓ | ✓ | ✓ | ✓ | ✓ | prints empty text |
-| `audio` | — | **new** | ✓ | ✓ | ✓ | prints empty text |
-| `resource_link` | — | — | **new** | ✓ | ✓ | prints empty text |
-| `tool_use` / `tool_result` (sampling only) | — | — | — | **new** | ✓ | — |
+| `text` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ (sanitized; JSON pretty-printed) |
+| `image` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ summarised (type, size) |
+| `resource` (embedded) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `audio` | — | **new** | ✓ | ✓ | ✓ | ✓ summarised (type, size) |
+| `resource_link` | — | — | **new** | ✓ | ✓ | ✓ |
+| `tool_use` / `tool_result` (sampling only) | — | — | — | **new** | ✓ | ✓ shown in sampling |
 
 ## Client features (server to client)
 
-| Feature | 2024-11-05 | 2025-03-26 | 2025-06-18 | 2025-11-25 | 2026-07-28 | Today |
+| Feature | 2024-11-05 | 2025-03-26 | 2025-06-18 | 2025-11-25 | 2026-07-28 | Driver |
 |---|---|---|---|---|---|---|
-| Delivery | JSON-RPC request | request | request | request | MRTR (`InputRequiredResult`) | requests, stdio only |
+| Delivery | JSON-RPC request | request | request | request | MRTR (`InputRequiredResult`) | ✓ requests (all transports) and MRTR |
 | Roots | ✓ | ✓ | ✓ | ✓ | D | ✓ |
-| Sampling | ✓ | + audio | ✓ | + `tools`, `toolChoice`; `includeContext` values `thisServer` and `allServers` soft-D | D | — |
-| Elicitation, form mode | — | — | **new** | + defaults, titled and multi-select enums (SEP-1330, SEP-1034) | ✓ | — |
-| Elicitation, URL mode | — | — | — | **new** (SEP-1036) | ✓, without `elicitationId` or the complete notification | — |
+| Sampling | ✓ | + audio | ✓ | + `tools`, `toolChoice`; `includeContext` values `thisServer` and `allServers` soft-D | D | ✓ human-in-the-loop |
+| Elicitation, form mode | — | — | **new** | + defaults, titled and multi-select enums (SEP-1330, SEP-1034) | ✓ | ✓ every field type and enum style |
+| Elicitation, URL mode | — | — | — | **new** (SEP-1036) | ✓, without `elicitationId` or the complete notification | ✓ consent prompt; never opens URLs |
 
 ## Transports
 
-| Feature | 2024-11-05 | 2025-03-26 | 2025-06-18 | 2025-11-25 | 2026-07-28 | Today |
+| Feature | 2024-11-05 | 2025-03-26 | 2025-06-18 | 2025-11-25 | 2026-07-28 | Driver |
 |---|---|---|---|---|---|---|
 | stdio | ✓ | ✓ + batches | ✓ | stderr may carry any logging | server MUST NOT send requests | ✓ |
 | HTTP+SSE (GET → `endpoint` event, then POST) | ✓ | D | D | D | D (SEP-2596) | — |
-| Streamable HTTP POST (JSON or SSE response; 202 for notifications) | — | **new** | ✓ | ✓ | ✓ | ✓; the SSE parser keeps only the last event, dropping notifications and server requests |
+| Streamable HTTP POST (JSON or SSE response; 202 for notifications) | — | **new** | ✓ | ✓ | ✓ | ✓ every SSE event routed |
 | `Mcp-Session-Id`; 404 means re-initialize; DELETE ends the session | — | ✓ | ✓ | ✓ | ✗ | ✓ |
-| GET listening stream (405 if unsupported) | — | ✓ | ✓ | ✓ | ✗ (`subscriptions/listen`) | — |
-| SSE resumability (`id`, `Last-Event-ID`) | — | ✓ | ✓ | + priming event, `retry`, polling (SEP-1699) | ✗; re-issue the request | — |
-| `MCP-Protocol-Version` header | — | only during auth discovery | **new** (required) | ✓ | required; must match `_meta` | — |
-| `Mcp-Method`, `Mcp-Name` headers (`=?base64?…?=` sentinel) | — | — | — | — | **new** (required) | — |
+| GET listening stream (405 if unsupported) | — | ✓ | ✓ | ✓ | ✗ (`subscriptions/listen`) | ✓ `/listen` |
+| SSE resumability (`id`, `Last-Event-ID`) | — | ✓ | ✓ | + priming event, `retry`, polling (SEP-1699) | ✗; re-issue the request | ✓ resumes, honouring `retry` |
+| `MCP-Protocol-Version` header | — | only during auth discovery | **new** (required) | ✓ | required; must match `_meta` | ✓ from 2025-06-18 |
+| `Mcp-Method`, `Mcp-Name` headers (`=?base64?…?=` sentinel) | — | — | — | — | **new** (required) | ✓ |
 | Invalid `Origin` | SHOULD validate | SHOULD | MUST validate | 403 | ✓ | n/a (server-side) |
 
 ## Authorization (HTTP transports)
 
-| Feature | 2024-11-05 | 2025-03-26 | 2025-06-18 | 2025-11-25 | 2026-07-28 | Today |
+| Feature | 2024-11-05 | 2025-03-26 | 2025-06-18 | 2025-11-25 | 2026-07-28 | Driver |
 |---|---|---|---|---|---|---|
 | OAuth 2.1 + PKCE | — | **new** | ✓ | ✓; S256 must be advertised | ✓ | — |
 | AS metadata (RFC 8414) | — | **new**; falls back to `/authorize`, `/token`, `/register` | ✓ | + OIDC discovery | ✓ | — |
@@ -240,7 +240,7 @@ return unsolicited task handles.
 | Dynamic Client Registration (RFC 7591) | — | SHOULD | SHOULD | MAY | D; + `application_type` | — |
 | `iss` validation (RFC 9207) | — | — | — | — | **new** (SEP-2468) | — |
 | Credentials keyed by issuer | — | — | — | — | **new** (SEP-2352) | — |
-| Static bearer token / custom headers | — | — | — | — | — | — |
+| Static bearer token / custom headers | — | — | — | — | — | ✓ `--bearer-env`, `--header`, `/header` |
 
 ## Extensions and discovery outside the dated core
 

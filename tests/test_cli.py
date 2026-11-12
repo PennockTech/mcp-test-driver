@@ -116,5 +116,16 @@ class TestEndToEnd:
         assert any(m == "DELETE" for (m, *_) in srv.requests)
 
     def test_initialize_failure_exits_nonzero(self, fake_stdio) -> None:  # noqa: ANN001
-        r = _run(["--no-trace", *fake_stdio({"mode": "modern", "versions": ["2026-07-28"]})])
+        r = _run(["--no-trace", "--era", "legacy", *fake_stdio({"mode": "modern", "versions": ["2026-07-28"]})])
         assert r.returncode == 1 and "MCP error" in r.stderr
+
+    def test_auto_era_reaches_modern_server(self, fake_stdio) -> None:  # noqa: ANN001
+        cmd = fake_stdio({"mode": "modern", "versions": ["2026-07-28"], "tools": SAMPLE_TOOLS})
+        r = _run(["--no-trace", *cmd], stdin="echo text=new\n")
+        assert r.returncode == 0, r.stderr
+        assert "2026-07-28 via stateless (modern)" in r.stdout
+        assert '"text": "new"' in r.stdout
+
+    def test_era_modern_against_legacy_server_fails(self, fake_stdio) -> None:  # noqa: ANN001
+        r = _run(["--no-trace", "--era", "modern", "--probe-timeout", "1", *fake_stdio({"tools": SAMPLE_TOOLS})])
+        assert r.returncode == 1 and "stateless" in r.stderr

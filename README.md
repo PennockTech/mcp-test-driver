@@ -62,7 +62,9 @@ mcp> unicode_lookup_char char=✓
 | `--version`              | Show the version                                                |
 | `--trace` / `--no-trace` | Show (default) or hide JSON-RPC traffic at start-up             |
 | `-q`, `--quiet`          | Skip the start-up connection report                             |
-| `--protocol-version REV` | Revision to offer (default: latest handshake revision)          |
+| `--era auto\|legacy\|modern` | Protocol era (default `auto`; see below)                     |
+| `--protocol-version REV` | Revision to offer or request (default: the latest of each era)  |
+| `--probe-timeout SECS`   | How long `--era auto` waits for `server/discover` (default 5)   |
 | `--timeout SECS`         | How long to wait for a reply (default 120)                      |
 | `--roots[=PATH]`         | Advertise a filesystem root (bare `--roots`: current directory) |
 | `--elicitation[=MODES]`  | Answer elicitation requests interactively (`form`, `url`)       |
@@ -72,6 +74,25 @@ mcp> unicode_lookup_char char=✓
 | `--header 'NAME: VALUE'` | Extra HTTP header (repeatable)                                  |
 | `--bearer-env VAR`       | Send `Authorization: Bearer $VAR`                               |
 | `--insecure`             | Skip TLS certificate verification (testing only)                |
+
+## Protocol eras
+
+MCP has two eras: the `initialize` handshake (2024-11-05 to 2025-11-25)
+and the stateless protocol (2026-07-28 onwards), where every request
+carries its protocol version and capabilities in `_meta`.  By default the
+driver behaves as the spec's *dual-era client*: it probes with
+`server/discover`, stays stateless if the server understands it (or
+answers with a recognised modern error), and otherwise falls back to
+`initialize`.  The start-up report shows what was tried and why.
+
+- `--era legacy` skips the probe; `--era modern` refuses legacy servers.
+- In the stateless era, the driver sends the per-request `_meta`, the
+  `MCP-Protocol-Version`, `Mcp-Method`, `Mcp-Name` and `Mcp-Param-*`
+  (from `x-mcp-header`) HTTP headers, and answers multi round-trip
+  `InputRequiredResult`s with the elicitation, sampling and roots handlers,
+  retrying the request with `inputResponses` and `requestState`.
+- `/loglevel` sets the per-request `_meta` log level; `/ping` and other
+  removed methods are still sent if you ask, with a note.
 
 ## Built-in Commands
 
@@ -101,6 +122,8 @@ Lists the server does not advertise are fetched on demand, with a note.
 | ------------------------------------------------ | ----- | ----------------------------------------------- |
 | `/complete prompt\|resource <ref> <arg>=<partial>` | `/c`  | Argument completion (`completion/complete`)     |
 | `/ping`                                          |       | Ping the server                                 |
+| `/discover`                                      |       | Send `server/discover` (in any era)             |
+| `/listen [secs] [tools] [prompts] [resources] [uri ...]` | | Listen for unsolicited messages: `subscriptions/listen` (2026-07-28) or the HTTP GET stream |
 | `/loglevel <level> [--rpc]`                      | `/ll` | Set the server log level                        |
 | `/roots [on [path] \| off \| add <path> \| remove <uri>]` |  | Show or change the roots capability   |
 
@@ -201,7 +224,6 @@ wiring up a model.
 Work in progress is tracked in
 [docs/roadmap-multi-version.md](docs/roadmap-multi-version.md).
 
-- **2026-07-28 stateless protocol**: not yet negotiated automatically.
 - **Legacy HTTP+SSE transport** (2024-11-05): not yet supported.
 - **OAuth**: only static credentials (`--bearer-env`, `--header`).
 

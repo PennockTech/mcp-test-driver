@@ -26,7 +26,7 @@ from .color import cyan, dim, eprint, red, yellow
 from .diagnostics import DiagnosticLog, Level
 from .handlers import HandlerError, HandlerRegistry, PingHandler, RootsHandler
 from .interactive import ElicitationHandler, Prompter, SamplingHandler
-from .messages import JsonObject, JsonValue, Kind, classify
+from .messages import JsonObject, JsonValue, Kind, as_obj, classify
 from .negotiate import ConnectOptions
 from .sanitize import safe_json, sanitize
 from .transport import (
@@ -50,6 +50,11 @@ META_SUBSCRIPTION_ID = META_PREFIX + "subscriptionId"
 
 # Requests that may carry a progress token usefully.
 _PROGRESS_METHODS = {"tools/call", "prompts/get", "resources/read", "completion/complete"}
+# 2026-07-28: the only requests a server may answer with InputRequiredResult.
+MRTR_METHODS = {"tools/call", "prompts/get", "resources/read"}
+# 2026-07-28: results that must carry ttlMs and cacheScope (CacheableResult).
+CACHEABLE_METHODS = {"tools/list", "prompts/list", "resources/list", "resources/read", "resources/templates/list"}
+_MAX_MRTR_ROUNDS = 8
 
 
 def _client_version() -> str:
@@ -231,7 +236,7 @@ class McpSession:
         else:
             msg = f"{method} is from {intro}, beyond negotiated {spec.name}; sent anyway"
         eprint(dim(f"  note: {msg}"))
-        self.findings.note(f"sent-{direction}-outside-version", msg)
+        self.findings.note(f"sent-{direction}-outside-version", msg, shown=True)
 
     # ── the receive loop ───────────────────────────────────────────────
 
@@ -243,10 +248,70 @@ class McpSession:
         timeout: float | None = None,
         headers: dict[str, str] | None = None,
     ) -> JsonObject:
-        """Send a request and return the raw response message."""
+        """Send a request and return the raw response message.
+
+        If the server answers with an InputRequiredResult (multi round-trip
+        requests, 2026-07-28), the inputs are gathered through the handler
+        registry and the request is retried, as many rounds as it takes.
+        """
         self._note_method(method)
-        req = self.build_request(method, params)
-        return self.exchange(req, timeout=timeout, headers=headers)
+        resp = self.exchange(self.build_request(method, params), timeout=timeout, headers=headers)
+        for rounds in range(1, _MAX_MRTR_ROUNDS + 1):
+            result = resp.get("result")
+            if not (isinstance(result, dict) and result.get("resultType") == "input_required"):
+                return resp
+            retry = self._mrtr_params(method, params, result)
+            if retry is None:
+                return resp
+            eprint(dim(f"  retrying {method} with the requested input (round {rounds})"))
+            resp = self.exchange(self.build_request(method, retry), timeout=timeout, headers=headers)
+        self.findings.violation(
+            "mrtr-too-many-rounds",
+            f"{method} still wanted input after {_MAX_MRTR_ROUNDS} rounds; stopped",
+            "basic/patterns/mrtr",
+            level=Level.WARNING,
+        )
+        return resp
+
+    def _mrtr_params(self, method: str, params: JsonObject | None, result: JsonObject) -> JsonObject | None:
+        """Fulfil an InputRequiredResult; the params for the retry, or None to stop."""
+        if method not in MRTR_METHODS:
+            self.findings.violation(
+                "mrtr-wrong-method",
+                f"{method} returned InputRequiredResult; only {', '.join(sorted(MRTR_METHODS))} may",
+                "basic/patterns/mrtr#supported-requests",
+            )
+        if self.state.era != "modern":
+            self.findings.beyond("mrtr-in-handshake-era", f"{method} used multi round-trip requests (2026-07-28)")
+        requests = result.get("inputRequests")
+        state = result.get("requestState")
+        if requests is None and state is None:
+            self.findings.violation(
+                "mrtr-empty", "InputRequiredResult has neither inputRequests nor requestState", "basic/patterns/mrtr"
+            )
+            return None
+        responses: JsonObject = {}
+        for key, req in (requests.items() if isinstance(requests, dict) else []):
+            inner = req if isinstance(req, dict) else {}
+            inner_method = str(inner.get("method"))
+            inner_params = as_obj(inner.get("params"))
+            eprint(cyan(f"  <<< input requested: {sanitize(inner_method)} (key {sanitize(str(key))})"))
+            self.server_requests_seen.append(inner_method)
+            if not self.handler_registry.has(inner_method):
+                eprint(red(f"  This client cannot answer {sanitize(inner_method)}; "
+                           "enable it with /elicitation, /sampling or /roots and retry."))
+                return None
+            try:
+                responses[str(key)] = self.handler_registry.dispatch(inner_method, inner_params)
+            except HandlerError as e:
+                eprint(yellow(f"  {sanitize(inner_method)} declined: {sanitize(e.message)}"))
+                return None
+        retry = dict(params or {})
+        if responses:
+            retry["inputResponses"] = responses
+        if state is not None:
+            retry["requestState"] = state
+        return retry
 
     def exchange(
         self,
@@ -269,7 +334,9 @@ class McpSession:
             )
             return found
         try:
-            return self.wait_for(req_id, timeout=timeout)
+            resp = self.wait_for(req_id, timeout=timeout)
+            self._observe_result(str(req.get("method")), resp)
+            return resp
         except KeyboardInterrupt:
             self.cancel(req_id, "interrupted by user")
             raise RequestCancelled(f"Request {req_id} cancelled") from None
@@ -334,6 +401,54 @@ class McpSession:
     def _observe_response(self, msg: JsonObject) -> None:
         if msg.get("jsonrpc") != "2.0":
             self.findings.violation("jsonrpc-version", 'response lacks "jsonrpc": "2.0"', "basic")
+
+    def _observe_result(self, method: str, resp: JsonObject) -> None:
+        """Conformance notes on a response, given the request that caused it."""
+        modern = self.state.era == "modern"
+        err = resp.get("error")
+        if isinstance(err, dict):
+            code = err.get("code")
+            if modern and code == versions.RESOURCE_NOT_FOUND_LEGACY:
+                self.findings.violation(
+                    "legacy-resource-not-found-code",
+                    "server used -32002 for a missing resource; 2026-07-28 uses -32602",
+                    "server/resources#error-handling",
+                    level=Level.WARNING,
+                )
+            return
+        result = resp.get("result")
+        if not isinstance(result, dict):
+            return
+        meta = result.get("_meta")
+        if isinstance(meta, dict) and isinstance(meta.get(META_SERVER_INFO), dict) and not self.state.server_info:
+            self.state.server_info = meta[META_SERVER_INFO]
+        if "resultType" in result and not modern:
+            self.findings.beyond("result-type-in-handshake-era", f"{method} result carries resultType (2026-07-28)")
+        if not modern:
+            return
+        if "resultType" not in result:
+            self.findings.violation(
+                "missing-result-type",
+                f"{method} result lacks resultType, required in {self.spec.name}",
+                "basic#responses",
+                level=Level.WARNING,
+            )
+        if method in CACHEABLE_METHODS and result.get("resultType", "complete") == "complete":
+            missing = [k for k in ("ttlMs", "cacheScope") if k not in result]
+            if missing:
+                self.findings.violation(
+                    "missing-cache-fields",
+                    f"{method} result lacks {' and '.join(missing)}, required in {self.spec.name}",
+                    "basic/utilities/caching",
+                    level=Level.WARNING,
+                )
+            scope = result.get("cacheScope")
+            if scope is not None and scope not in ("public", "private"):
+                self.findings.violation(
+                    "bad-cache-scope", f"{method} cacheScope is {sanitize(str(scope))!r}", "basic/utilities/caching"
+                )
+        if not (isinstance(meta, dict) and META_SERVER_INFO in meta):
+            self.findings.note("no-server-info-meta", "results do not carry io.modelcontextprotocol/serverInfo (SHOULD)")
 
     def _observe_notification(self, msg: JsonObject) -> None:
         method = str(msg.get("method"))
@@ -531,6 +646,37 @@ class McpSession:
                 "basic/versioning",
                 level=Level.WARNING,
             )
+        self.apply_wire()
+
+    def adopt_modern(self, version: str, result: JsonObject, how: str) -> None:
+        """Record a server/discover result: the stateless era is in effect."""
+        supported = result.get("supportedVersions")
+        self.state.era = "modern"
+        self.state.supported = [v for v in supported if isinstance(v, str)] if isinstance(supported, list) else []
+        if not self.state.supported:
+            self.findings.violation("discover-no-versions", "server/discover result lacks supportedVersions",
+                                    "schema#discoverresult")
+        caps = result.get("capabilities")
+        self.state.capabilities = caps if isinstance(caps, dict) else {}
+        if not isinstance(caps, dict):
+            self.findings.violation("discover-no-capabilities", "server/discover result lacks capabilities",
+                                    "schema#discoverresult")
+        instr = result.get("instructions")
+        self.state.instructions = instr if isinstance(instr, str) else None
+        meta = result.get("_meta")
+        info = meta.get(META_SERVER_INFO) if isinstance(meta, dict) else None
+        self.state.server_info = info if isinstance(info, dict) else {}
+        self.state.version = version
+        self.state.offered = version
+        self.state.client_capabilities = self.client_capabilities()
+        self.state.how_chosen.append(how)
+        self.state.initialized = True
+        self.apply_wire()
+
+    def reset_to_handshake(self) -> None:
+        """Forget a failed modern probe before falling back to initialize."""
+        how = self.state.how_chosen
+        self.state = ServerState(offered=self.offer_version, how_chosen=how)
         self.apply_wire()
 
     def reconnect(self) -> None:
