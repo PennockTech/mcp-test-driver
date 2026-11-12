@@ -1,5 +1,6 @@
-<!-- Approved plan for multi-version MCP support. Phase 0 (this doc, the feature
-     matrix and the vendored specs) is done; later phases land as separate PRs. -->
+<!-- Approved plan for multi-version MCP support.  Phase 0 (this doc, the
+     feature matrix and the vendored specs) and Step A (the Pages CIMD site)
+     are done; later phases land as commits on the feature branch. -->
 
 # Roadmap: make mcp-test-driver a multi-version MCP diagnostic driver
 
@@ -246,11 +247,15 @@ Existing modules that change:
 - Trace output and the report always redact `Authorization` and token values.
 - `/auth status|login|refresh|logout` commands.
 
-**Open item, CIMD hosting:**
+**CIMD hosting (decided: GitHub Pages from this repo):**
 
-- CIMD requires a `client_id` that is an HTTPS URL serving our metadata document.
-- Recommendation: host a static `client.json` for mcp-test-driver, for example on the project's GitHub Pages, listing loopback redirect URIs, and make it the default CIMD identity. Users can override it with `--client-metadata-url`.
-- To confirm when we reach that phase: whether the loopback redirect's port variability is accepted under CIMD's exact-match rule. RFC 8252 permits port variance for loopback redirects.
+- `client_id` is `https://pennocktech.github.io/mcp-test-driver/oauth/client.json`. It is a constant in `oauth.py`; `--client-metadata-url` overrides it.
+- **Ports:** the CIMD draft defers to RFC 9700 §4.1.3, which lets loopback redirects use any port. Some authorization servers still compare redirects exactly. To serve both kinds, `redirect_uris` lists:
+  - `http://127.0.0.1/callback` and `http://[::1]/callback`, portless, for ASes that allow any loopback port
+  - `http://127.0.0.1:33418/callback`, for ASes that compare exactly
+- The driver binds port 33418 first and falls back to an ephemeral port. `--callback-port` overrides this.
+- **Document fields:** `client_id`, `client_name`, `client_uri` (the repo), `redirect_uris`, `grant_types` (`authorization_code`, `refresh_token`), `response_types` (`code`), `token_endpoint_auth_method: "none"`, `application_type: "native"`. Per the draft, it carries no secret.
+- **Moving off github.io later is possible but costs something:** the `client_id` changes, and once a CNAME is set, github.io redirects to the custom domain. ASes that refuse redirects would then reject the old ID, which older released versions still use. So any custom domain should be settled before the first release that ships OAuth. `--client-metadata-url` is always available as an escape hatch.
 
 ### Era and version negotiation (in `negotiate.py`, following the spec's dual-era rules)
 
@@ -289,9 +294,9 @@ Existing modules that change:
 
 ---
 
-## Phases (each is its own PR; each must pass `uv run ruff check`, `uv run ty check`, `uv run pytest`)
+## Phases (each must pass `uv run ruff check`, `uv run ty check`, `uv run pytest`)
 
-0. **Specs and docs, no code changes.**
+0. **Specs and docs, no code changes. (Done: `4d2aa62`.)**
    - Add `scripts/fetch-specs.sh`, which pulls `schema/<ver>/schema.json` (and `schema.ts`) for every released version, plus `draft`, from `raw.githubusercontent.com`. It records the upstream commit SHA and date in `docs/specs/README.md`.
    - The same script also pulls the conformance suite's `requirements/*.yaml` into `docs/specs/conformance/`.
    - Commit the files under `docs/specs/<ver>/`.
@@ -299,6 +304,7 @@ Existing modules that change:
    - Rewrite `docs/mcp-spec-notes.md` to the current state, fixing the `.well-known/mcp` claims and adding the era model.
    - Update the "Not implemented" section of `docs/security-model.md` as later phases land.
 1. **Foundations and bug fixes.**
+   - The cross-cutting refactors listed under "Execution" below.
    - `versions.py` covering all five revisions plus `draft`, with tests that cross-check its method and capability sets against the vendored `schema.json` files.
    - The generic `send()` with `/send`, `/notify` and `/raw`.
    - The shared message router (SSE no longer drops messages; batch support).
@@ -333,7 +339,7 @@ Existing modules that change:
    - `--otel`.
 6. **OAuth.** Authorization code + PKCE with a loopback callback and paste-back mode; pre-registration, CIMD and DCR; token-endpoint auth methods; refresh and step-up; client credentials; device grant if advertised; the token cache.
    - Fake authorization server fixtures cover every `auth/*` conformance client scenario we target.
-   - Settle the CIMD hosting question before this phase starts.
+   - The default CIMD identity is the GitHub Pages `client.json` from Step A.
 7. **Probing and conformance.**
    - `probe.py`: `/probe`, `--probe`, `--probe-versions`, dual-era detection, and `/matrix`.
    - `/check` and `--check`: a generic server conformance suite keyed to the official scenario IDs; `--json` output; non-zero exit when there are violations.
@@ -342,6 +348,67 @@ Existing modules that change:
    - Tasks: 2025-11-25 core (`--task`, `/tasks list|get|result|cancel`) and the SEP-2663 extension (`get|update|cancel`, unsolicited handles).
    - MCP Apps (`/app`), Skills, and the `--extension` opt-in.
    - README and AGENTS.md updates. (README and the security-model doc are also updated as each phase lands.)
+
+## Execution (approved 2026-11-12: implement every phase)
+
+Phase 0 is done (commit `4d2aa62`).
+
+**Branch and commits:**
+
+- Each phase lands as one or more commits.
+- Every commit passes `uv run ruff check`, `uv run ty check` and `uv run pytest`.
+- Transport and protocol phases also run `uv run tox`.
+
+### Step A: GitHub Pages CIMD site (small, first, so Pages can be enabled early)
+
+- `site/index.html`: a one-paragraph landing page linking to the repo.
+- `site/oauth/client.json`: as specified above.
+- `.github/workflows/pages.yaml`:
+  - Runs on push to `main` when `site/**` changes, and on `workflow_dispatch`.
+  - `permissions: {}` at the top level. The build job gets `contents: read`; the deploy job gets `pages: write` and `id-token: write`, plus `environment: github-pages`.
+  - Uses `actions/checkout` (`persist-credentials: false`), `actions/configure-pages`, `actions/upload-pages-artifact` (path `site`) and `actions/deploy-pages`.
+  - Every action is SHA-pinned in the house style (`@<sha> # vX.Y.Z`). Current tags: configure-pages v6.0.0 `45bfe019…`, upload-pages-artifact v5.0.0 `fc324d35…`, deploy-pages v5.0.1 `368f8252…`. Re-verify these with `git ls-remote` when writing the file.
+  - Same header comments as the other workflows. Audit with `uvx zizmor .github/workflows/`.
+- `tests/test_site.py`: `client.json` parses; its `client_id` equals the constant in `oauth.py` (until that module exists, a constant in the test) and is HTTPS with a path; it has no `client_secret` and no shared-secret auth methods; its `redirect_uris` match what `oauth.py` binds.
+- **User action:** in repo Settings → Pages → Source, choose "GitHub Actions". The site goes live only once this reaches `main`.
+- The same commit syncs `docs/roadmap-multi-version.md` with this updated plan (the CIMD decision and this Execution section).
+
+### Cross-cutting refactors (Phase 1, before features pile on)
+
+- **`sanitize.py`:** move `sanitize` out of `transport.py`. Keep a re-export so existing imports keep working, then switch internal imports over.
+- **`transport/` package:**
+  - `base.py`: Transport Protocol and errors
+  - `sse.py`: one SSE event parser (`id`, `event`, `data`, `retry`; byte cap), shared by Streamable HTTP and legacy SSE
+  - `stdio.py`, `http.py`, and later `legacy_sse.py`
+  - `__init__.py` re-exports today's public names
+- **`messages.py`:** `classify()`, which sorts a message into response, notification or server request, plus batch expansion.
+  - **A dispatcher owned by `McpSession`** receives everything that isn't the awaited response. It handles display, diagnostics, cache invalidation and server-request handlers.
+  - Transports no longer print notifications or own the handler registry, which removes the duplicated `_show_notification` / `_handle_server_request` logic.
+  - IDs of requests abandoned by Ctrl-C go in a set, and late responses to them are dropped with a dim note.
+  - `Transport.drain_pending()` polls without blocking, before each prompt, so idle-time stdio notifications show up.
+- **`commands.py`:** one `Command` registry (name, alias, help, handler name, argument-completion kind). It replaces the `BUILTIN_COMMANDS` tuple list in `completion.py` and the `if`/`elif` chain in `repl._dispatch_builtin`. Help, completion and dispatch all derive from it.
+- **Threads:** background readers (the legacy SSE GET stream, `/listen`) only enqueue messages. The main thread drains the queue and does all printing. Interactive prompts for elicitation and sampling turn the readline completer off and back on afterwards.
+- **Version dedup:** `McpSession.CLIENT_VERSION` comes from `importlib.metadata.version("mcp-test-driver")`, falling back to `__init__.__version__`.
+- **CI:** enable the commented-out `ruff check` / `ty check` steps in `ci.yaml`. They pass now, which resolves the FIXME.
+- **Optional dependency:** a `validate` extra (`jsonschema`). When installed, it validates `structuredContent` against `outputSchema` and checks `inputSchema` itself; otherwise those checks report "skipped". The extra is added through `uv add --optional`, so `uv.lock` stays managed by uv.
+
+### Per-phase docs
+
+- The feature matrix's "Today" column becomes "Driver", updated as features land.
+- README options and commands, and `docs/security-model.md` (new network fetches, OAuth listener, token cache), are updated in the same commit as the feature.
+- The final phase updates the AGENTS.md layout and marks the roadmap complete.
+
+### Test infrastructure
+
+- **`tests/fakes/stdio_server.py`:** a scenario-driven fake, configured by a JSON file passed as an argument and run under `-I`. It can act as a legacy server at version X, a modern server, a dual-era server, a server that ignores or crashes on unknown methods, or one that sends notifications, server requests or MRTR results.
+- **`tests/fakes/http_server.py`:** a threaded `http.server` with pluggable route handlers. It covers Streamable HTTP, priming and resume, 404 session expiry, modern 400 error bodies, legacy HTTP+SSE (including a cross-origin `endpoint`), and 401/403 challenges.
+- **`tests/fakes/auth_server.py`:** PRM and AS metadata variants, an authorize endpoint (auto-approves, then redirects to the loopback), a token endpoint with each client auth method, DCR, the CIMD fetch, `iss` variants, and step-up. One test per targeted conformance `auth/*` scenario.
+- **Real servers:** `tests/integration/`, marked `integration` and skipped unless `MCPTD_INTEGRATION=1`, with a `task test-integration` shortcut. They drive:
+  - Python SDK `mcp==2.3.0` (dual-era) through `uv run --with`
+  - `@modelcontextprotocol/server-everything@2.3.0` through `npx`
+  - an old `mcp` 1.x HTTP+SSE server
+  - Run during development (Node 22, PyPI and npm are reachable here), not in default CI.
+- **Conformance:** `.github/workflows/conformance.yaml` runs a pinned `@modelcontextprotocol/conformance` client leg against the driver's `--check` mode on `workflow_dispatch` and PRs, with `continue-on-error` at first. Read the harness contract (how it passes the server URL to the `--command`) from its README when implementing.
 
 ## Testing approach
 
