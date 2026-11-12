@@ -26,7 +26,7 @@ import re
 import threading
 import time
 from collections import deque
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -41,6 +41,7 @@ from .base import (
     DEFAULT_TIMEOUT,
     HTTP_CONNECT_TIMEOUT,
     MAX_RESPONSE_BYTES,
+    AuthProvider,
     AuthRequiredError,
     ConnectionClosed,
     HttpStatusError,
@@ -126,6 +127,7 @@ class HttpTransport:
         self.wire.extra_headers.update(extra_headers or {})
         # Authorization is kept apart from extra_headers so OAuth can swap it.
         self.authorization: str | None = None
+        self.auth: AuthProvider | None = None
         self._session_id: str | None = None
         self._inbox: deque[Any] = deque()
         self._q: queue.Queue[tuple[str, Any, Any]] = queue.Queue()
@@ -213,17 +215,40 @@ class HttpTransport:
     def post_url(self) -> str:
         return self.url
 
+    def _authorized(self, attempt: int, do: Callable[[], None]) -> None:
+        """Run an HTTP exchange, renewing credentials on 401/403 if we can."""
+        while True:
+            if self.auth is not None:
+                header = self.auth.current_header()
+                if header:
+                    self.authorization = header
+            try:
+                do()
+                return
+            except AuthRequiredError as e:
+                if self.auth is None:
+                    raise
+                header = self.auth.handle_challenge(e.status, e.www_authenticate or None, attempt)
+                if not header:
+                    raise
+                self.authorization = header
+                attempt += 1
+
     def send(self, payload: Payload, *, headers: Mapping[str, str] | None = None) -> None:
         body = json.dumps(payload, separators=(",", ":")).encode()
         if self.trace:
             trace_send(payload)
-        resp = self._request("POST", self._post_headers(payload, headers), body, url=self.post_url())
         origin = "POST"
         request_id = None
         if isinstance(payload, dict) and isinstance(payload.get("method"), str):
             origin = f"POST {payload['method']}"
             request_id = payload.get("id")
-        self._handle_response(resp, origin, request_id)
+
+        def post() -> None:
+            resp = self._request("POST", self._post_headers(payload, headers), body, url=self.post_url())
+            self._handle_response(resp, origin, request_id)
+
+        self._authorized(1, post)
 
     def send_bytes(self, data: bytes) -> None:
         """POST raw bytes as the body, for malformed-input testing."""
@@ -479,20 +504,24 @@ class HttpTransport:
         """Open the GET stream for unsolicited server messages; raises on 405."""
         if self._get_stream is not None:
             return
-        headers = {"Accept": "text/event-stream", **self.base_headers()}
-        if self.trace:
-            trace_info(f"GET {self.url} (listening stream)")
-        resp = self._request("GET", headers, None, read_timeout=None)
-        try:
+
+        def get() -> None:
+            headers = {"Accept": "text/event-stream", **self.base_headers()}
             if self.trace:
-                trace_info(f"HTTP {resp.status} {resp.headers.get('Content-Type', '')}".rstrip())
-            self._check_status(resp)
-            if "text/event-stream" not in resp.headers.get("Content-Type", ""):
-                raise TransportError("GET did not return an SSE stream")
-        except Exception:
-            resp.release_conn()
-            raise
-        self._get_stream = self._start_stream(resp, "GET", None)
+                trace_info(f"GET {self.url} (listening stream)")
+            resp = self._request("GET", headers, None, read_timeout=None)
+            try:
+                if self.trace:
+                    trace_info(f"HTTP {resp.status} {resp.headers.get('Content-Type', '')}".rstrip())
+                self._check_status(resp)
+                if "text/event-stream" not in resp.headers.get("Content-Type", ""):
+                    raise TransportError("GET did not return an SSE stream")
+            except Exception:
+                resp.release_conn()
+                raise
+            self._get_stream = self._start_stream(resp, "GET", None)
+
+        self._authorized(1, get)
 
     def close_listen_stream(self) -> None:
         if self._get_stream is not None:

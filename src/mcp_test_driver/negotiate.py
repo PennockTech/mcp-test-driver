@@ -114,6 +114,7 @@ def switch_to_legacy_sse(session: McpSession) -> None:
     )
     new.trace = old.trace
     new.authorization = getattr(old, "authorization", None)
+    new.auth = getattr(old, "auth", None)
     old.close()
     session.transport = new
     session.state.how_chosen.append(f"HTTP+SSE endpoint: {sanitize(new.endpoint or '?')}")

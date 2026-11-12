@@ -41,19 +41,66 @@ def auth_discover(repl: Repl) -> Any:
     return disc
 
 
+def _oauth_client(repl: Repl, create: bool) -> Any:
+    from ..oauth import OAuthClient, OAuthOptions
+
+    transport = repl.session.transport
+    auth = getattr(transport, "auth", None)
+    if auth is None and create:
+        url = _http_url(repl)
+        if url is None:
+            return None
+        auth = OAuthClient(url, OAuthOptions(), repl.session.findings,
+                           fetcher=JsonFetcher(verify_tls=repl.verify_tls),
+                           protocol_version=repl.session.state.version)
+        setattr(transport, "auth", auth)
+    return auth
+
+
 @command(
     "/auth",
     group="Auth",
-    summary="OAuth: discovery and diagnostics (more subcommands with OAuth support)",
-    usage="/auth discover    show the protected-resource and authorization-server metadata chain",
-    words=("discover",),
+    summary="OAuth: discovery, login, status, refresh, logout",
+    usage=(
+        "/auth discover   show the protected-resource and authorization-server metadata chain\n"
+        "/auth login      log in now (authorization code + PKCE unless --auth-flow chose otherwise)\n"
+        "/auth status     who we are logged in as, scopes, expiry\n"
+        "/auth refresh    use the refresh token\n"
+        "/auth logout     forget tokens (and the cached copy)"
+    ),
+    words=("discover", "login", "status", "refresh", "logout"),
 )
 def cmd_auth(repl: Repl, rest: str) -> None:
-    sub = rest.split()[0] if rest.split() else "discover"
-    if sub == "discover":
-        auth_discover(repl)
-    else:
-        print(red(f"Unknown /auth subcommand {sanitize(sub)!r}"))
+    from ..oauth import OAuthError
+
+    sub = rest.split()[0] if rest.split() else "status"
+    try:
+        if sub == "discover":
+            auth_discover(repl)
+        elif sub == "login":
+            auth = _oauth_client(repl, create=True)
+            if auth is not None:
+                tokens = auth.login(repl.session.last_www_authenticate)
+                setattr(repl.session.transport, "authorization", tokens.header())
+        elif sub in ("status", "refresh", "logout"):
+            auth = _oauth_client(repl, create=False)
+            if auth is None:
+                print(dim("OAuth is not in use; /auth login starts it."))
+                return
+            if sub == "refresh":
+                setattr(repl.session.transport, "authorization", auth.refresh().header())
+            elif sub == "logout":
+                auth.logout()
+                setattr(repl.session.transport, "authorization", None)
+                print(dim("Logged out."))
+                return
+            for line in auth.status_lines():
+                print(f"  {line}")
+        else:
+            print(red(f"Unknown /auth subcommand {sanitize(sub)!r}"))
+    except OAuthError as e:
+        print(red(f"OAuth: {sanitize(str(e))}"))
+    print_findings(repl.session.findings.take_unshown())
 
 
 def _card_urls(url: str) -> list[tuple[str, str]]:

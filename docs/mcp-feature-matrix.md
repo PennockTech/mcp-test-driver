@@ -231,15 +231,15 @@ return unsolicited task handles.
 
 | Feature | 2024-11-05 | 2025-03-26 | 2025-06-18 | 2025-11-25 | 2026-07-28 | Driver |
 |---|---|---|---|---|---|---|
-| OAuth 2.1 + PKCE | — | **new** | ✓ | ✓; S256 must be advertised | ✓ | discovery and checks (`/auth discover`) |
+| OAuth 2.1 + PKCE | — | **new** | ✓ | ✓; S256 must be advertised | ✓ | ✓ `--oauth`, `/auth login`: code + PKCE, client credentials, device grant |
 | AS metadata (RFC 8414) | — | **new**; falls back to `/authorize`, `/token`, `/register` | ✓ | + OIDC discovery | ✓ | ✓ fetched and checked, incl. 2025-03-26 defaults |
 | Protected Resource Metadata (RFC 9728) | — | — | **new**; `WWW-Authenticate resource_metadata` | + well-known fallback (path-inserted, then root) | ✓ | ✓ header, then well-known, as specified |
-| Resource indicators (RFC 8707) | — | — | **new** | ✓ | ✓ | — |
-| Scope challenge and step-up on 403 `insufficient_scope` | — | — | — | **new** (SEP-835) | ✓ | scope shown |
-| Client ID Metadata Documents | — | — | — | **new** (SEP-991) | ✓ | — |
-| Dynamic Client Registration (RFC 7591) | — | SHOULD | SHOULD | MAY | D; + `application_type` | — |
-| `iss` validation (RFC 9207) | — | — | — | — | **new** (SEP-2468) | — |
-| Credentials keyed by issuer | — | — | — | — | **new** (SEP-2352) | — |
+| Resource indicators (RFC 8707) | — | — | **new** | ✓ | ✓ | ✓ on every authorization and token request |
+| Scope challenge and step-up on 403 `insufficient_scope` | — | — | — | **new** (SEP-835) | ✓ | ✓ scope precedence; step-up with retry limit |
+| Client ID Metadata Documents | — | — | — | **new** (SEP-991) | ✓ | ✓ ours by default (GitHub Pages), or `--client-metadata-url` |
+| Dynamic Client Registration (RFC 7591) | — | SHOULD | SHOULD | MAY | D; + `application_type` | ✓ fallback, with `application_type: native`; flagged deprecated |
+| `iss` validation (RFC 9207) | — | — | — | — | **new** (SEP-2468) | ✓ refused on mismatch or when advertised but missing |
+| Credentials keyed by issuer | — | — | — | — | **new** (SEP-2352) | ✓ re-registers when the issuer changes; `--token-cache` |
 | Static bearer token / custom headers | — | — | — | — | — | ✓ `--bearer-env`, `--header`, `/header` |
 
 ## Extensions and discovery outside the dated core

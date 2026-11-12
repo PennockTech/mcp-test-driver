@@ -135,6 +135,25 @@ HTTP+SSE `endpoint`, server cards.
   whose stream was abandoned is ignored; otherwise it is reported as a
   broken stream.
 
+### OAuth (oauth.py)
+
+- **Loopback redirect listener**: bound to 127.0.0.1 only, accepts a single
+  request on `/callback`, and lives only for the login (5 minutes at most).
+- **CSRF and mix-up**: `state` must match; a present `iss` must equal the
+  issuer (RFC 9207), and a missing `iss` is refused when the AS advertises
+  it.  PKCE (S256) is always used.
+- **Audience**: protected-resource metadata whose `resource` is not this
+  server is refused (RFC 9728 §3.3), and every authorization and token
+  request carries the RFC 8707 `resource` indicator.
+- **Secrets**: client secrets come from the environment
+  (`--client-secret-env`), never argv.  Tokens are never traced; `/auth
+  status` shows only the first characters.  The token cache is written
+  with mode 0600 and ignored (with a warning) if group- or world-readable;
+  entries are keyed by server and record the issuer, so a different
+  authorization server means a new registration (2026-07-28).
+- **Browser**: the authorization URL is printed (sanitized); a browser is
+  opened only with `--browser`.
+
 ### Interactive Handlers (interactive.py)
 
 Elicitation and sampling are opt-in (`--elicitation`, `--sampling`): with
@@ -177,7 +196,8 @@ turned into a raw send.
 
 ## What Is NOT Implemented
 
-- **OAuth 2.1 authentication**: The spec defines full OAuth, but as a test
-  driver we don't implement auth flows.
+- **OAuth extensions**: enterprise-managed authorization (ID-JAG), DPoP,
+  `private_key_jwt` and WIF jwt-bearer are not implemented (discovery
+  shows what an AS offers).
 - **DNS discovery**: only unofficial third-party drafts exist.
 - **Server Cards / AI Catalog**: fetched only on request (`/server-card`).
