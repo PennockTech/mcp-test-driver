@@ -1,6 +1,6 @@
 # Copyright 2026 Phil Pennock — see LICENSE file.
 
-"""Tests for defences against malicious servers (see docs/security-model.md)."""
+"""Tests for defences against malicious servers (see docs/designs/security.md)."""
 
 from __future__ import annotations
 

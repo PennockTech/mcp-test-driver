@@ -1,8 +1,10 @@
 # MCP Feature Matrix
 
-Which Model Context Protocol features exist in which spec revision, and
-what mcp-test-driver does with each today.  This is the reference for the
-multi-version work described in [roadmap-multi-version.md](roadmap-multi-version.md).
+Which MCP features exist in which spec revision, and what mcp-test-driver
+does with each.  Tables only: the semantics behind them are in
+[mcp-spec-notes.md](mcp-spec-notes.md).  `src/mcp_test_driver/versions.py`
+is this matrix in executable form, and tests check it against the
+vendored schemas in [specs/](specs/README.md).
 
 ## Revisions
 
@@ -29,35 +31,8 @@ Notes:
 - See [`specs/SOURCES`](specs/SOURCES) for the upstream commits.
   Refresh with `scripts/fetch-specs.sh`.
 
-### Two eras
-
-The protocol has two eras, and 2026-07-28 is a clean break between them:
-
-- **Handshake era** (2024-11-05 through 2025-11-25):
-  - `initialize` / `notifications/initialized` negotiates one version for the connection.
-  - Over HTTP, an `Mcp-Session-Id` carries that state.
-  - The server may send JSON-RPC requests to the client.
-- **Modern (stateless) era** (2026-07-28 onwards):
-  - There is no handshake and no session.
-  - Every request carries `io.modelcontextprotocol/protocolVersion` and
-    `io.modelcontextprotocol/clientCapabilities` in `params._meta`.
-  - `server/discover` advertises the server's versions and capabilities.
-  - Server-to-client requests are carried inside results, using Multi
-    Round-Trip Requests (MRTR).
-
-A **dual-era client** works with both kinds of server:
-
-- **stdio:** probe with `server/discover`.
-  - A `DiscoverResult`, or a recognized modern error such as `-32022`, means the server is modern.
-  - Any other error, or a timeout, means it is legacy: fall back to `initialize`.
-- **HTTP:** send a modern request.
-  - If it returns a 4xx without a recognized modern error body, fall back to a legacy `initialize`.
-  - If that fails too, fall back to the deprecated HTTP+SSE transport.
-- The fallback must never be keyed to one specific error code.
-- Clients should cache the era per server process (stdio) or origin (HTTP).
-
-Source: `2026-07-28/basic/versioning` (backward compatibility),
-`basic/transports/stdio` and `basic/transports/streamable-http`.
+2026-07-28 separates two eras: the `initialize` handshake before it, the
+stateless protocol from it onwards.  See "Eras" in the spec notes.
 
 ## Legend
 
@@ -256,25 +231,12 @@ return unsolicited task handles.
 ## Conformance suite
 
 [`modelcontextprotocol/conformance`](https://github.com/modelcontextprotocol/conformance)
-publishes a frozen list of required scenarios for each revision.  They are
-vendored under [`specs/conformance/`](specs/conformance/).
+publishes a frozen list of required server and client scenarios for each
+revision from 2025-11-25, vendored under
+[`specs/conformance/`](specs/conformance/).  Scenarios that apply to both
+eras run once under each.
 
-- **Server scenarios** include:
-  - `tools-*`, `resources-*` and `prompts-*`
-  - `completion-complete`
-  - `server-stateless`
-  - `caching`
-  - `sep-2164-resource-not-found`
-  - `dns-rebinding-protection`
-  - the `input-required-result-*` family (MRTR)
-- **Client scenarios** include:
-  - `request-metadata`
-  - `http-standard-headers`
-  - `http-custom-headers`
-  - `sep-2322-client-request-state`
-  - about 25 `auth/*` scenarios
-- Scenarios that apply to both eras must be run once under each.
-
-mcp-test-driver passes every client scenario in both requirement lists
-(`scripts/conformance-client.sh`), and its own `--check` IDs reuse the
-suite's scenario names where they test the same behaviour.
+mcp-test-driver passes every client scenario in both lists
+(`task conformance`).  Its own `--check` IDs reuse the suite's scenario
+names where they test the same behaviour
+([decision 0012](decisions/0012-probes-and-checks.md)).

@@ -1,12 +1,12 @@
 # MCP Specification Notes
 
-Working notes on the parts of the MCP spec that matter most to a test
-driver: transports, sessions, discovery and authorization.
+The parts of the MCP spec that matter to a test driver: eras, transports,
+discovery and authorization, for every released revision from 2024-11-05
+to **2026-07-28** (the latest).
 
-These notes cover every released revision, from 2024-11-05 to
-**2026-07-28** (the latest).  For the feature-by-revision breakdown, see
-[mcp-feature-matrix.md](mcp-feature-matrix.md).  The authoritative schemas
-are vendored under [specs/](specs/).
+- Which feature exists in which revision: [mcp-feature-matrix.md](mcp-feature-matrix.md).
+- The authoritative text: the vendored schemas in [specs/](specs/README.md).
+- What the driver does about any of it: [designs/](README.md).
 
 ## Eras
 
@@ -217,17 +217,6 @@ stdio servers take credentials from the environment instead.
 
 - OAuth redirect URIs must exactly match the registered values.
 - MCP defines no behaviour for HTTP redirects on the MCP endpoint itself.
-  mcp-test-driver refuses to follow them, as a defence against SSRF.
-
-## Security considerations for clients
-
-- Treat every server-supplied string as untrusted: tool names,
-  descriptions, `instructions`, URLs, stderr, and session IDs.
-- Never key authorization to a session ID.
-- Keep metadata fetches, the legacy SSE `endpoint` and the URLs in
-  URL-mode elicitation on expected origins, and never open them
-  automatically.
-- See [security-model.md](security-model.md).
 
 ## Key references
 

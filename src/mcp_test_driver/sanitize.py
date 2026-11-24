@@ -3,7 +3,7 @@
 """Neutralise server-supplied text before it reaches the terminal.
 
 Every string an MCP server sends us (tool names, descriptions, results,
-URLs, stderr) is untrusted.  See docs/security-model.md.
+URLs, stderr) is untrusted.  See docs/designs/security.md.
 """
 
 from __future__ import annotations
