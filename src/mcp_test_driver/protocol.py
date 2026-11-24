@@ -57,15 +57,6 @@ CACHEABLE_METHODS = {"tools/list", "prompts/list", "resources/list", "resources/
 _MAX_MRTR_ROUNDS = 8
 
 
-def _client_version() -> str:
-    try:
-        from importlib.metadata import version
-
-        return version("mcp-test-driver")
-    except Exception:
-        return __version__
-
-
 class McpError(Exception):
     """The server answered with a JSON-RPC error."""
 
@@ -124,7 +115,7 @@ class McpSession:
     """One logical connection to an MCP server, over any transport."""
 
     CLIENT_NAME = "mcp-test-driver"
-    CLIENT_VERSION = _client_version()
+    CLIENT_VERSION = __version__
 
     def __init__(
         self,
