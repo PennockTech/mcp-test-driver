@@ -125,6 +125,14 @@ scenario keys); extend those rather than mocking transports.
 
 - Develop on a feature branch; never push directly to `main`.
 - Use clear, descriptive commit messages focused on the *why*.
+- Write commit subjects as [Conventional Commits](https://www.conventionalcommits.org/):
+  `feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `perf:`, `ci:`, `chore:`
+  (optionally scoped, `fix(oauth): ...`; `!` or a `BREAKING CHANGE:` footer
+  for breaking changes).  The next release version is computed from them.
+- **Never change the version** in `pyproject.toml` (or its line in
+  `uv.lock`), and never tag.  Only the maintainer's `task
+  release:commits-and-tag` does that, with a signed tag; see the README's
+  "Versions and releases".
 - Do not skip pre-commit hooks (`--no-verify`) or signing without
   explicit human request.
 

@@ -453,6 +453,34 @@ The protocol revision registry is cross-checked against the vendored
 upstream schemas in `docs/specs/`; refresh them with
 `scripts/fetch-specs.sh`.
 
+### Versions and releases
+
+Only the release tasks in `Taskfile.yml` change the version, which lives
+in `pyproject.toml` (and, as uv records it, `uv.lock`).  Between releases
+it is the next patch as a dev release, e.g. `0.2.1.dev0`; at a release
+commit it is exactly the tag.  Commits follow
+[Conventional Commits](https://www.conventionalcommits.org/), and
+[convco](https://github.com/convco/convco) (`cargo install --locked
+convco`) picks the next version from them:
+
+```sh
+task next-version:show                         # what the next release would be
+VERSION_OVERRIDE=v0.3.0 task next-version:show # or choose it
+```
+
+To release, on an up-to-date, clean `main`:
+
+```sh
+task release:commits-and-tag                   # or VERSION_OVERRIDE=vX.Y.Z task ...
+```
+
+That commits the release version, makes a signed tag (opening an editor
+for its message), and commits the next dev version.  It never pushes:
+review, then `git push origin main vX.Y.Z`.  The tag push runs
+`.github/workflows/release.yaml`, which checks the tag against
+`pyproject.toml`, runs the tests, drafts a GitHub release and publishes to
+PyPI.
+
 ## AI Disclosure
 
 A LLM development tool was used extensively in the creation of this tool.

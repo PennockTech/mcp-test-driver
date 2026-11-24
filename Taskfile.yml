@@ -1,5 +1,21 @@
 version: '3'
 
+vars:
+  release_tag_message_prefix: mcp-test-driver version
+  # The version is in pyproject.toml; uv.lock records it too, and the release
+  # workflow installs with `uv sync --locked`, so both change together.
+  version_files: pyproject.toml uv.lock
+
+env:
+  # Allow a version override to come before the command as an env override,
+  # OR to come after the command as a var-assignment.
+  #
+  # We do this at the top-level because `release:commits-and-tag` uses a
+  # sub-process to invoke us, to get the version into a shell variable, and we
+  # need the CLI assignment to propagate into the environment.
+  # Note though that we do need to explicitly unset this for the _second_ invocation.
+  VERSION_OVERRIDE: "{{.VERSION_OVERRIDE}}"
+
 tasks:
   default:
     desc: Show available tasks
@@ -52,3 +68,196 @@ tasks:
     desc: Run mcp-test-driver (pass args after --)
     cmds:
       - uv run mcp-test-driver {{.CLI_ARGS}}
+
+  # ── versions and releases ──────────────────────────────────────────
+  #
+  # Only these tasks change the version.  Between releases pyproject.toml
+  # holds the next patch release as a dev release (0.2.1.dev0, from the tag
+  # form v0.2.1-dev); at a release commit it holds exactly the tag.  The next
+  # version comes from Conventional Commits via convco, or VERSION_OVERRIDE.
+  # Tags use the v-prefixed semver form; pyproject.toml gets uv's PEP 440
+  # normalisation of it (v0.3.0-rc1 -> 0.3.0rc1), which the release workflow
+  # checks against the tag before publishing.
+
+  next-version:show:
+    desc: Show the next version to use
+    silent: true
+    deps: [_have_cargo_tool:convco]
+    env:
+      task_exe: "{{.TASK_EXE}}"
+      task_name: "{{.TASK}}"
+    cmd: |-2
+      shopt -s extglob
+      if [[ -n "${VERSION_OVERRIDE:-}" ]]; then
+        case "$VERSION_OVERRIDE" in
+          ( v+([0-9]).+([0-9]).+([0-9])?(-*) ) printf '%s\n'  "$VERSION_OVERRIDE" ;;
+          (  +([0-9]).+([0-9]).+([0-9])?(-*) ) printf '%s\n' "v$VERSION_OVERRIDE" ;;
+          *) echo >&2 "${task_exe}: ${task_name}: REJECTING dubious VERSION_OVERRIDE=${VERSION_OVERRIDE@Q}"; exit 65 ;;
+        esac
+        exit 0
+      fi
+      old="$(convco version --pp)"
+      pure="$(convco version --pp --bump)"
+      if [[ "$old" != "$pure" ]]; then
+        printf '%s\n' "$pure"
+        exit 0
+      fi
+      if convco check "${old}..HEAD" >/dev/null; then
+        # all commits were conventional
+        current="$(git describe)"
+        if [[ "$current" == "$old" ]]; then
+          # We are at the release, we bump to -dev
+          echo "$(convco version --pp --patch)-dev"
+        else
+          echo >&2 "${task_exe}: ${task_name}: error: ${old@Q}..${current@Q} has commits and were all conventional but failed to get a version bump"
+          exit 1
+        fi
+      else
+        # I have not been behaving
+        convco version --pp --patch
+      fi
+
+  next-version:write:
+    desc: Update pyproject.toml and uv.lock to the next version
+    deps: [_have_cargo_tool:convco]
+    env:
+      task_exe: "{{.TASK_EXE}}"
+    cmd: |-2
+      set -euo pipefail
+      # Pass the task-level value on explicitly: when VERSION_OVERRIDE came from
+      # the shell environment, that would otherwise win over the empty override
+      # release:commits-and-tag uses for the post-release -dev bump.
+      nv="$(env VERSION_OVERRIDE={{shellQuote .VERSION_OVERRIDE}} "$task_exe" next-version:show)"
+      # uv normalises to PEP 440 and relocks; --no-sync leaves the venv alone.
+      uv version --no-sync "${nv#v}"
+
+  release:preflight:
+    desc: Verify we're on main and up-to-date with all remotes
+    internal: true
+    silent: true
+    env:
+      task_exe: "{{.TASK_EXE}}"
+      task_name: "{{.TASK}}"
+    cmd: |-2
+      branch="$(git rev-parse --abbrev-ref HEAD)"
+
+      # FUTURE: also allow release/v* branches (see release:commits-and-tag for full design notes)
+      if [[ "$branch" != "main" ]]; then
+        echo >&2 "${task_exe}: ${task_name}: must be on 'main', currently on ${branch@Q}"
+        exit 1
+      fi
+
+      if ! git diff --quiet || ! git diff --cached --quiet; then
+        echo >&2 "${task_exe}: ${task_name}: working tree or index is dirty — commit or stash first"
+        exit 1
+      fi
+
+      git fetch --all --quiet
+
+      local_sha="$(git rev-parse HEAD)"
+      stale=()
+      while IFS= read -r remote; do
+        remote_ref="refs/remotes/${remote}/${branch}"
+        if ! git rev-parse --verify "$remote_ref" >/dev/null 2>&1; then
+          continue
+        fi
+        remote_sha="$(git rev-parse "$remote_ref")"
+        if [[ "$remote_sha" == "$local_sha" ]]; then
+          continue
+        fi
+        # Remote is strictly behind us — that's fine (we have unpushed commits, or are about to)
+        if git merge-base --is-ancestor "$remote_sha" "$local_sha"; then
+          continue
+        fi
+        stale+=("${remote}/${branch} (${remote_sha::12})")
+      done < <(git remote)
+
+      if [[ ${#stale[@]} -gt 0 ]]; then
+        echo >&2 "${task_exe}: ${task_name}: local ${branch} is behind or has diverged from:"
+        printf >&2 '  - %s\n' "${stale[@]}"
+        echo >&2 "Pull or rebase before releasing."
+        exit 1
+      fi
+
+  release:commits-and-tag:
+    # Deliberately DOES NOT PUSH: a human must review for sanity.  Pushing the
+    # tag runs .github/workflows/release.yaml, which publishes to PyPI.
+    #
+    # CURRENT LIMITATION: assumes release from main.
+    # The -dev bump commit is made on the current branch, which is correct for main
+    # but wrong for release branches.
+    #
+    # FUTURE: support release/v* branches.  When on a release branch:
+    #   - Do bump + tag only (no -dev bump on the release branch)
+    #   - After tagging, print instructions for the merge-to-main step
+    #   - The preflight check should also validate the release branch is up-to-date
+    #
+    # After tagging on a release branch, the tag may need to become an ancestor
+    # of main so that git-describe on main produces sane output.  But ONLY if the
+    # tag is newer than any tag already reachable from main.  Two cases:
+    #
+    # (a) Main already has a newer tag (e.g., main is at v2.3.0-dev, release
+    #     branch just tagged v1.0.1):  No merge needed.  git-describe on main
+    #     already uses the newer tag.  Just sanity-check that main is ahead.
+    #
+    # (b) The release tag is newer than main's latest tag (e.g., initial release
+    #     from a branch just cut from main):  Use a single synthetic merge commit
+    #     that records the tag as an ancestor AND bumps main to -dev:
+    #       tag="$(git describe)"
+    #       next_ver="$(convco version --patch)-dev"
+    #       git checkout main
+    #       git fetch origin main
+    #       git merge --ff-only origin/main  # abort if main has diverged
+    #       git diff --quiet && git diff --cached --quiet \
+    #         || { echo >&2 "main is dirty"; exit 1; }
+    #       VERSION_OVERRIDE="$next_ver" task next-version:write
+    #       git add pyproject.toml uv.lock
+    #       main_tree="$(git write-tree)"
+    #       c="$(git commit-tree "$main_tree" -p HEAD -p "$tag" \
+    #            -m "merge: record $tag as ancestor & bump to $next_ver")"
+    #       git merge --ff-only "$c"
+    #     The merge commit's tree contains main's content with the -dev bump,
+    #     while its parents link both main and the tag.  One commit, no conflicts,
+    #     no misleading diffs.  Uses git plumbing — needs good comments.
+    #
+    # Defer implementation until we have experience with at least one release branch.
+    #
+    desc: commit a version bump, tag, commit version bump
+    deps: [_have_cargo_tool:convco, release:preflight]
+    env:
+      release_version:
+        sh: '"{{.TASK_EXE}}" next-version:show'
+      message_prefix: "{{.release_tag_message_prefix}}"
+      version_files: "{{.version_files}}"
+      task_exe: "{{.TASK_EXE}}"
+    cmds:
+      - '[[ -n "${message_prefix:-}" ]] || { echo >&2 "missing message_prefix, Taskfile problem"; exit 70; }'
+      - task: next-version:write
+      - 'git commit -o $version_files -m "chore: bump hard-coded version to ${release_version}"'
+      - 'git tag -s -m "${message_prefix} ${release_version#v}" -e "$release_version"'
+      - task: next-version:write
+        vars:
+          VERSION_OVERRIDE: ""
+      - 'git commit -o $version_files -m "chore: bump hard-coded version to $(env VERSION_OVERRIDE="" "$task_exe" next-version:show)"'
+      - 'echo "Review, then publish with:  git push origin main ${release_version}"'
+
+  _have_cargo_tool:*:  # shim for when the binary name == crate name
+    internal: true
+    silent: true
+    cmds:
+      - task: "_have_cargo_tool_crate:{{index .MATCH 0}}:{{index .MATCH 0}}"
+
+  _have_cargo_tool_crate:*:*:  # wildcards are: binary name, then crate
+    internal: true
+    silent: true
+    # if: block seems to not succeed when there's a templated index in there
+    env:
+      task_exe: "{{.TASK_EXE}}"
+      want_bin: "{{index .MATCH 0}}"
+      crate: "{{index .MATCH 1}}"
+    cmd: |-2
+      if command -v "$want_bin" >/dev/null 2>&1; then
+        exit 0  # we have it
+      fi
+      echo >&2 "${task_exe}: missing tool '${want_bin}', consider:  cargo install --locked ${crate@Q}"
+      exit 69 # EX_UNAVAILABLE
