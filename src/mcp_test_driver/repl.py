@@ -1,6 +1,6 @@
 # Copyright 2026 Phil Pennock — see LICENSE file.
 
-"""Interactive REPL for MCP tool invocation."""
+"""Interactive REPL for exercising an MCP server."""
 
 from __future__ import annotations
 
@@ -8,132 +8,143 @@ import json
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from . import commands
 from .color import bold, dim, red
 from .completion import (
-    BUILTIN_ALIASES,
-    BUILTIN_COMMANDS,
-    BUILTIN_PREFIX,
     CompletionState,
     readline_info,
-    schedule_restore_input,
     setup_readline,
 )
+from .diagnostics import Level, print_findings
 from .parse import parse_args
-from .protocol import McpError
-from .transport import TransportError, sanitize
+from .protocol import McpError, RequestCancelled
+from .render import render_error, render_response
+from .sanitize import sanitize
+from .transport import AuthRequiredError, SessionExpiredError, TransportError
+from .transport.params import param_headers
+from .versions import Feature
 
 if TYPE_CHECKING:
     from .protocol import McpSession
 
+# Lists the REPL caches: kind → (method, result key, capability that advertises it).
+LISTS: dict[str, tuple[str, str, str]] = {
+    "tools": ("tools/list", "tools", "tools"),
+    "resources": ("resources/list", "resources", "resources"),
+    "templates": ("resources/templates/list", "resourceTemplates", "resources"),
+    "prompts": ("prompts/list", "prompts", "prompts"),
+}
+
+_LIST_CHANGED = {
+    "notifications/tools/list_changed": ("tools",),
+    "notifications/resources/list_changed": ("resources", "templates"),
+    "notifications/prompts/list_changed": ("prompts",),
+}
+
 
 @dataclass
 class SessionCache:
-    """Cached data from the MCP server, discarded on reconnect."""
+    """Server lists, fetched lazily and refreshed on list_changed."""
 
-    tools: list[dict[str, Any]] = field(default_factory=list)
-    resources: list[dict[str, Any]] = field(default_factory=list)
-    resource_templates: list[dict[str, Any]] = field(default_factory=list)
-    prompts: list[dict[str, Any]] = field(default_factory=list)
-    server_info: dict[str, Any] = field(default_factory=dict)
+    lists: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    stale: set[str] = field(default_factory=set)
     completion: CompletionState = field(default_factory=CompletionState)
+
+    @property
+    def tools(self) -> list[dict[str, Any]]:
+        return self.lists.get("tools", [])
+
+    @property
+    def resources(self) -> list[dict[str, Any]]:
+        return self.lists.get("resources", [])
+
+    @property
+    def resource_templates(self) -> list[dict[str, Any]]:
+        return self.lists.get("templates", [])
+
+    @property
+    def prompts(self) -> list[dict[str, Any]]:
+        return self.lists.get("prompts", [])
+
+    def rebuild_completion(self) -> None:
+        self.completion = CompletionState.from_tools(
+            self.tools, prompts=self.prompts, resources=self.resources
+        )
 
     @classmethod
     def build(cls, session: McpSession) -> SessionCache:
-        tools = session.list_tools()
+        cache = cls()
+        cache.fetch_advertised(session)
+        return cache
 
-        # Fetch resources, templates, and prompts if the server supports them.
-        # Servers that don't support these will return errors — catch and skip.
-        resources: list[dict[str, Any]] = []
-        resource_templates: list[dict[str, Any]] = []
-        prompts: list[dict[str, Any]] = []
-
+    def fetch_advertised(self, session: McpSession) -> None:
+        """Fetch what the server advertises.  Tools are always tried: many
+        servers forget the capability, and a tool-less REPL is no use."""
         caps = session.server_capabilities
-        if "resources" in caps:
-            try:
-                resources = session.list_resources()
-            except (McpError, TransportError, ConnectionError):
-                pass
-            try:
-                resource_templates = session.list_resource_templates()
-            except (McpError, TransportError, ConnectionError):
-                pass
-        if "prompts" in caps:
-            try:
-                prompts = session.list_prompts()
-            except (McpError, TransportError, ConnectionError):
-                pass
+        self.lists.clear()
+        for kind, (_, _, cap) in LISTS.items():
+            if kind == "tools" or cap in caps:
+                self.fetch(session, kind, quiet=kind == "tools" and cap not in caps)
+        self.stale.clear()
+        self.rebuild_completion()
 
-        state = CompletionState.from_tools(tools)
-        state.resource_uris = [
-            sanitize(str(r.get("uri", ""))) for r in resources if r.get("uri")
-        ]
-        state.prompt_names = [
-            sanitize(str(p.get("name", ""))) for p in prompts if p.get("name")
-        ]
-
-        return cls(
-            tools=tools,
-            resources=resources,
-            resource_templates=resource_templates,
-            prompts=prompts,
-            server_info=session.server_info,
-            completion=state,
-        )
-
-
-def _print_result(resp: dict[str, Any]) -> None:
-    # Check for JSON-RPC error response
-    error = resp.get("error")
-    if isinstance(error, dict):
-        code = error.get("code", "?")
-        message = error.get("message", "Unknown error")
-        print(red(f"Server error [{code}]: {message}"))
-        data = error.get("data")
-        if data:
-            print(red(f"  {data}"))
-        return
-
-    result = resp.get("result")
-    if not isinstance(result, dict):
-        # No result and no error — unusual but not fatal
-        if result is not None:
-            print(str(result))
-        return
-
-    is_error = result.get("isError", False)
-    content = result.get("content")
-    if not isinstance(content, list):
-        # For responses without content (e.g., prompt results, resource reads),
-        # pretty-print the entire result.
-        print(json.dumps(result, indent=2, ensure_ascii=False))
-        return
-
-    for item in content:
-        if not isinstance(item, dict):
-            continue
-        text = item.get("text", "")
-        if not isinstance(text, str):
-            text = str(text)
-        if is_error:
-            print(red(f"Error: {text}"))
+    def fetch(self, session: McpSession, kind: str, *, quiet: bool = False) -> list[dict[str, Any]]:
+        method, key, cap = LISTS[kind]
+        try:
+            items = session._paginated_list(method, key)
+        except (McpError, TransportError, ConnectionError) as e:
+            if not quiet:
+                print(red(f"{method} failed: {e}"))
+            items = []
         else:
-            try:
-                parsed = json.loads(text)
-                print(json.dumps(parsed, indent=2, ensure_ascii=False))
-            except json.JSONDecodeError:
-                print(text)
+            if cap not in session.server_capabilities and items:
+                session.findings.violation(
+                    f"{cap}-without-capability",
+                    f"server answered {method} with {len(items)} item(s) but does not "
+                    f"advertise the {cap!r} capability",
+                    "basic/lifecycle#capability-negotiation",
+                    level=Level.WARNING,
+                )
+        self.lists[kind] = items
+        self.stale.discard(kind)
+        return items
+
+    def ensure(self, session: McpSession, kind: str) -> list[dict[str, Any]]:
+        if kind in self.lists and kind not in self.stale:
+            return self.lists[kind]
+        cap = LISTS[kind][2]
+        if kind not in self.lists and cap not in session.server_capabilities:
+            print(dim(f"Server does not advertise {cap!r}; asking anyway."))
+        items = self.fetch(session, kind)
+        self.rebuild_completion()
+        return items
 
 
 class Repl:
     """Interactive REPL for MCP tool invocation."""
 
-    def __init__(self, session: McpSession) -> None:
+    def __init__(self, session: McpSession, *, cache: SessionCache | None = None, verify_tls: bool = True) -> None:
         self.session = session
-        self.cache = SessionCache.build(session)
-        self._trace_enabled = session.transport.trace
+        self.verify_tls = verify_tls
+        self.cache = cache if cache is not None else SessionCache.build(session)
+        self.trace_enabled = session.transport.trace
+        self.last_response: dict[str, Any] | None = None
+        self.last_probe: list[Any] = []
+        # Tool calls returning a task handle are followed to the result.
+        self.follow_tasks = True
+        # skills/list entries by URI, for digest checks.
+        self.skills: dict[str, dict[str, Any]] = {}
+        # Commands that failed (transport or JSON-RPC errors), for --exec.
+        self.failures = 0
+        session.notification_listeners.append(self._on_notification)
 
-    def run(self) -> None:
-        server_name = sanitize(str(self.cache.server_info.get("name", "MCP server")))
+    def _on_notification(self, msg: dict[str, Any]) -> None:
+        kinds = _LIST_CHANGED.get(str(msg.get("method")))
+        if kinds:
+            self.cache.stale.update(kinds)
+
+    def banner(self) -> None:
+        server_name = sanitize(str(self.session.server_info.get("name", "MCP server")))
         print()
         print(bold(f"mcp-test-driver — connected to {server_name}"))
         rl_name, rl_version = readline_info()
@@ -149,345 +160,109 @@ class Repl:
         print(dim(tab_hint))
         print()
 
+    def run(self) -> None:
+        self.banner()
         setup_readline(self.cache.completion)
-
         while True:
+            self.before_prompt()
             try:
                 line = input("mcp> ").lstrip()
             except (EOFError, KeyboardInterrupt):
                 print()
                 break
+            if line and not self.handle_line(line):
+                break
 
-            if not line:
-                continue
+    def before_prompt(self) -> None:
+        """Show what arrived while idle, refresh stale lists, report findings."""
+        try:
+            self.session.pump()
+        except TransportError as e:
+            print(red(f"Transport error: {e}"))
+        if self.cache.stale:
+            for kind in sorted(self.cache.stale):
+                if kind in self.cache.lists:
+                    self.cache.fetch(self.session, kind)
+            self.cache.stale.clear()
+            self.cache.rebuild_completion()
+            setup_readline(self.cache.completion)
+            print(dim("(lists refreshed after list_changed)"))
+        print_findings(self.session.findings.take_unshown())
 
-            parts = line.split(None, 1)
-            cmd = parts[0]
-            rest = parts[1] if len(parts) > 1 else ""
-
-            if cmd in BUILTIN_ALIASES:
-                cmd = BUILTIN_ALIASES[cmd]
-
-            try:
-                if cmd.startswith(BUILTIN_PREFIX):
-                    if not self._dispatch_builtin(cmd, rest):
-                        break
-                else:
-                    self._invoke_tool(cmd, rest)
-            except TransportError as e:
-                print(red(f"Transport error: {e}"))
-            except ConnectionError as e:
-                print(red(f"Connection lost: {e}"))
-            except McpError as e:
-                print(red(f"MCP error [{e.code}]: {e.message}"))
-                if e.data:
-                    print(red(f"  {e.data}"))
-            except Exception as e:
-                print(red(f"Unexpected error: {type(e).__name__}: {e}"))
-
-    def _dispatch_builtin(self, cmd: str, rest: str) -> bool:
-        """Handle a builtin command.  Returns False if the REPL should exit."""
-        if cmd in ("/quit",):
-            return False
-        if cmd == "/help":
-            self._cmd_help(rest)
-        elif cmd == "/list":
-            self._cmd_list()
-        elif cmd == "/describe":
-            self._cmd_describe(rest)
-        elif cmd == "/resources":
-            self._cmd_resources()
-        elif cmd == "/templates":
-            self._cmd_templates()
-        elif cmd == "/read":
-            self._cmd_read(rest)
-        elif cmd == "/prompts":
-            self._cmd_prompts()
-        elif cmd == "/prompt":
-            self._cmd_prompt(rest)
-        elif cmd == "/ping":
-            self._cmd_ping()
-        elif cmd == "/loglevel":
-            self._cmd_loglevel(rest)
-        elif cmd == "/roots":
-            self._cmd_roots(rest)
-        elif cmd == "/subscribe":
-            self._cmd_subscribe(rest)
-        elif cmd == "/unsubscribe":
-            self._cmd_unsubscribe(rest)
-        elif cmd == "/reconnect":
-            self._cmd_reconnect()
-        elif cmd == "/cache-flush":
-            self._cmd_cache_flush()
-        elif cmd == "/trace":
-            self._cmd_trace()
-        else:
-            print(red(f"Unknown command: {cmd}"))
-            print(dim('Type "/help" for usage.'))
+    def handle_line(self, line: str) -> bool:
+        """Run one input line.  Returns False if the REPL should exit."""
+        parts = line.split(None, 1)
+        word = parts[0]
+        rest = parts[1] if len(parts) > 1 else ""
+        try:
+            if word.startswith(commands.BUILTIN_PREFIX):
+                cmd = commands.resolve(word)
+                if cmd is None:
+                    print(red(f"Unknown command: {sanitize(word)}"))
+                    print(dim('Type "/help" for usage.'))
+                    return True
+                return cmd.func(self, rest) is not False
+            self.invoke_tool(word, rest)
+        except RequestCancelled:
+            self.failures += 1
+        except SessionExpiredError as e:
+            self.failures += 1
+            print(red(f"{e}"))
+        except AuthRequiredError as e:
+            self.failures += 1
+            self.session.last_www_authenticate = e.www_authenticate or None
+            print(red(f"{e}"))
+            print(dim("Run /auth discover to see what the server expects."))
+        except TransportError as e:
+            self.failures += 1
+            print(red(f"Transport error: {e}"))
+        except ConnectionError as e:
+            self.failures += 1
+            print(red(f"Connection lost: {e}"))
+        except McpError as e:
+            self.failures += 1
+            render_error({"code": e.code, "message": e.message, "data": e.data})
+        except ValueError as e:
+            self.failures += 1
+            print(red(f"Error: {e}"))
+        except Exception as e:
+            self.failures += 1
+            print(red(f"Unexpected error: {type(e).__name__}: {sanitize(str(e))}"))
         return True
 
-    def _cmd_help(self, rest: str) -> None:
-        original = rest
-        rest = rest.strip()
-        if rest:
-            show_context_help_for(self.cache.completion, rest)
-            schedule_restore_input(original)
-        else:
-            _show_general_help()
+    def show(self, resp: dict[str, Any]) -> None:
+        self.last_response = resp
+        if "error" in resp:
+            self.failures += 1
+        render_response(resp)
 
-    def _cmd_list(self) -> None:
-        for t in self.cache.tools:
-            name = sanitize(str(t.get("name", "?")))
-            desc = sanitize(str(t.get("description", "")))
-            print(f"  {bold(name)}: {dim(desc)}")
+    def show_call(self, resp: dict[str, Any], tool: dict[str, Any] | None = None) -> None:
+        """Show a tools/call response, following it if it is a task."""
+        from .checks import check_tool_result
+        from .tasks import follow, task_in
 
-    def _cmd_describe(self, rest: str) -> None:
-        name = rest.strip()
-        if not name:
-            print(red("Usage: /describe <tool>"))
-            return
-        from .completion import _show_tool_help
+        handle = task_in(resp.get("result"))
+        if handle is not None and self.follow_tasks:
+            resp = follow(self.session, handle)
+        self.show(resp)
+        if tool is not None:
+            check_tool_result(self.session.findings, self.session.spec, tool, resp.get("result"))
 
-        _show_tool_help(self.cache.completion, name)
-
-    def _cmd_resources(self) -> None:
-        if not self.cache.resources:
-            print(dim("No resources available."))
-            return
-        for r in self.cache.resources:
-            uri = sanitize(str(r.get("uri", "?")))
-            name = sanitize(str(r.get("name", "")))
-            mime = sanitize(str(r.get("mimeType", "")))
-            desc = sanitize(str(r.get("description", "")))
-            line = f"  {bold(uri)}"
-            if name:
-                line += f"  {name}"
-            if mime:
-                line += f"  {dim('[' + mime + ']')}"
-            print(line)
-            if desc:
-                print(f"    {dim(desc)}")
-
-    def _cmd_templates(self) -> None:
-        if not self.cache.resource_templates:
-            print(dim("No resource templates available."))
-            return
-        for t in self.cache.resource_templates:
-            uri = sanitize(str(t.get("uriTemplate", "?")))
-            name = sanitize(str(t.get("name", "")))
-            mime = sanitize(str(t.get("mimeType", "")))
-            desc = sanitize(str(t.get("description", "")))
-            line = f"  {bold(uri)}"
-            if name:
-                line += f"  {name}"
-            if mime:
-                line += f"  {dim('[' + mime + ']')}"
-            print(line)
-            if desc:
-                print(f"    {dim(desc)}")
-
-    def _cmd_read(self, rest: str) -> None:
-        uri = rest.strip()
-        if not uri:
-            print(red("Usage: /read <uri>"))
-            return
-        resp = self.session.read_resource(uri)
-        if resp is None:
-            print(red("Server closed connection."))
-            return
-        _print_result(resp)
-
-    def _cmd_prompts(self) -> None:
-        if not self.cache.prompts:
-            print(dim("No prompts available."))
-            return
-        for p in self.cache.prompts:
-            name = sanitize(str(p.get("name", "?")))
-            desc = sanitize(str(p.get("description", "")))
-            print(f"  {bold(name)}: {dim(desc)}")
-            args = p.get("arguments", [])
-            if isinstance(args, list):
-                for arg in args:
-                    if not isinstance(arg, dict):
-                        continue
-                    aname = sanitize(str(arg.get("name", "?")))
-                    adesc = sanitize(str(arg.get("description", "")))
-                    req = " (required)" if arg.get("required") else ""
-                    print(f"    {bold(aname + '=')}{req}  {dim(adesc)}")
-
-    def _cmd_prompt(self, rest: str) -> None:
-        parts = rest.strip().split(None, 1)
-        if not parts:
-            print(red("Usage: /prompt <name> [key=val ...]"))
-            return
-        name = parts[0]
-        arg_text = parts[1] if len(parts) > 1 else ""
-        try:
-            arguments = parse_args(arg_text) if arg_text else None
-        except (json.JSONDecodeError, ValueError) as exc:
-            print(red(f"Could not parse arguments: {exc}"))
-            return
-        resp = self.session.get_prompt(name, arguments)
-        if resp is None:
-            print(red("Server closed connection."))
-            return
-        _print_result(resp)
-
-    def _cmd_ping(self) -> None:
-        self.session.ping()
-        print(dim("Pong."))
-
-    def _cmd_loglevel(self, rest: str) -> None:
-        level = rest.strip()
-        if not level:
-            print(red("Usage: /loglevel <level>"))
-            print(
-                dim(
-                    "  Levels: debug, info, notice, warning, error, critical, alert, emergency"
-                )
-            )
-            return
-        self.session.set_log_level(level)
-        print(dim(f"Log level set to {level}."))
-
-    def _cmd_subscribe(self, rest: str) -> None:
-        uri = rest.strip()
-        if not uri:
-            print(red("Usage: /subscribe <uri>"))
-            return
-        self.session.subscribe_resource(uri)
-        print(dim(f"Subscribed to {uri}."))
-
-    def _cmd_unsubscribe(self, rest: str) -> None:
-        uri = rest.strip()
-        if not uri:
-            print(red("Usage: /unsubscribe <uri>"))
-            return
-        self.session.unsubscribe_resource(uri)
-        print(dim(f"Unsubscribed from {uri}."))
-
-    def _cmd_roots(self, rest: str) -> None:
-        """Handle /roots [on [path] | off] — show or toggle the roots capability."""
-        from pathlib import Path
-
-        rest = rest.strip()
-        if not rest:
-            # Show current state
-            handler = self.session.roots_handler
-            if handler is None:
-                print(dim("Roots: disabled"))
-                print(dim("  Use /roots on [path] to enable, then /reconnect."))
-            else:
-                print(bold("Roots: enabled"))
-                print(f"  Base: {handler.base}")
-                for r in handler.roots:
-                    print(f"  {dim(r['uri'])}  {r.get('name', '')}")
-            return
-
-        parts = rest.split(None, 1)
-        subcmd = parts[0].lower()
-
-        if subcmd == "on":
-            path = Path(parts[1]) if len(parts) > 1 else Path.cwd()
-            try:
-                self.session.enable_roots(path)
-            except (OSError, ValueError) as e:
-                print(red(f"Cannot set roots: {e}"))
-                return
-            handler = self.session.roots_handler
-            if handler:
-                print(dim(f"Roots enabled for {handler.base}"))
-            print(dim("Run /reconnect for the server to see this."))
-        elif subcmd == "off":
-            self.session.disable_roots()
-            print(dim("Roots disabled."))
-            print(dim("Run /reconnect for the server to see this."))
-        else:
-            print(red("Usage: /roots [on [path] | off]"))
-
-    def _cmd_reconnect(self) -> None:
-        tools = self.session.reconnect()
-        self.cache = SessionCache.build(self.session)
+    def refresh_readline(self) -> None:
         setup_readline(self.cache.completion)
-        print(dim(f"Reconnected. {len(tools)} tools available."))
 
-    def _cmd_cache_flush(self) -> None:
-        self.cache = SessionCache.build(self.session)
-        setup_readline(self.cache.completion)
-        print(dim(f"Cache flushed. {len(self.cache.tools)} tools available."))
-
-    def _cmd_trace(self) -> None:
-        self._trace_enabled = not self._trace_enabled
-        self.session.transport.trace = self._trace_enabled
-        state = "on" if self._trace_enabled else "off"
-        print(dim(f"Protocol tracing {state}."))
-
-    def _invoke_tool(self, name: str, rest: str) -> None:
-        if name not in self.cache.completion.tool_names:
-            print(red(f"Unknown tool '{name}'."), dim("(type '/list' to see tools)"))
+    def invoke_tool(self, name: str, rest: str) -> None:
+        state = self.cache.completion
+        if name not in state.tool_names:
+            print(red(f"Unknown tool '{sanitize(name)}'."), dim("(type '/list' to see tools)"))
             return
-
         try:
             arguments = parse_args(rest)
         except (json.JSONDecodeError, ValueError) as exc:
             print(red(f"Could not parse arguments: {exc}"))
             return
-
-        resp = self.session.call_tool(name, arguments)
-        if resp is None:
-            print(red("Server closed connection unexpectedly."))
-            return
-
-        _print_result(resp)
-
-
-def show_context_help_for(state: CompletionState, text: str) -> None:
-    """Show help for a partial input line (used by F1/Esc-h macro)."""
-    parts = text.strip().split()
-    if not parts:
-        _show_general_help()
-        return
-
-    first = parts[0]
-    if first in state.tool_names:
-        if len(parts) > 1 and "=" in parts[-1]:
-            key = parts[-1].partition("=")[0]
-            desc_key = f"{first}:{key}"
-            desc = state.arg_descriptions.get(desc_key)
-            if desc:
-                print(f"  {bold(key)}: {desc}")
-                return
-        from .completion import _show_tool_help
-
-        _show_tool_help(state, first)
-    else:
-        print(red(f"Unknown: {first}"), dim("(type '/list' to see tools)"))
-
-
-def _show_general_help() -> None:
-    print()
-    print("  Built-in commands (/-prefixed):")
-    for canonical, alias, desc in BUILTIN_COMMANDS:
-        alias_col = alias if alias else "    "
-        print(f"    {bold(canonical):24s} {alias_col:6s}  {dim(desc)}")
-    print()
-    print("  Tool invocation:")
-    print(f"    {bold('<tool>'):<24s}         call with no arguments")
-    print(f"    {bold('<tool> key=val ...'):<24s}         call with keyword arguments")
-    print(f"    {bold('<tool> key=[a b] ...'):<24s}         list value")
-    print(f"    {bold('<tool> key=' + chr(123) + 'k: v' + chr(125)):<24s}         dict value")
-    print(
-        f"    {bold('<tool> ' + chr(123) + '...' + chr(125)):<24s}         call with raw JSON object"
-    )
-    print()
-    print("  Key=value notes:")
-    print("    Booleans: exact=true  exact=false")
-    print("    Integers: decimal=10003  (parsed automatically)")
-    print(
-        "    Strings:  all other values; quote with shell rules if they contain spaces"
-    )
-    print("    Lists:    paths=[src/foo.py src/bar.py]  tags=[\"hello world\", foo, 42]")
-    print("    Dicts:    filter={type: file, recursive: true}")
-    print()
-    print(f"  Press {bold('Tab')} to complete, {bold('F1')}/{bold('Esc-h')} for help.")
-    print()
+        headers = None
+        if self.session.transport.kind == "http" and self.session.spec.has(Feature.METHOD_HEADERS):
+            headers = param_headers(state.tool_schemas.get(name, {}), arguments) or None
+        resp = self.session.call_tool(state.real_tool_name(name), arguments, headers=headers)
+        self.show_call(resp, tool=state.tool_defs.get(name))

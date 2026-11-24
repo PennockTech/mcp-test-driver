@@ -31,6 +31,16 @@ tasks:
     cmds:
       - uv run tox {{.CLI_ARGS}}
 
+  test-integration:
+    desc: Run tests against real MCP servers (needs network, uv and node)
+    cmds:
+      - MCPTD_INTEGRATION=1 uv run pytest -m integration {{.CLI_ARGS}}
+
+  conformance:
+    desc: Run the official conformance suite's client scenarios (needs node)
+    cmds:
+      - scripts/conformance-client.sh {{.CLI_ARGS}}
+
   check:
     desc: Run all checks (lint + typecheck + test)
     cmds:

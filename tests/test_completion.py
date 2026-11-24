@@ -1,17 +1,16 @@
 # Copyright 2026 Phil Pennock — see LICENSE file.
 
-"""Tests for tab-completion and command definitions."""
+"""Tests for tab-completion, the command registry, and readline setup."""
 
 import sys
 import types
 from unittest.mock import patch
 
+import pytest
 
+from mcp_test_driver import commands
+from mcp_test_driver.commands import BUILTIN_PREFIX
 from mcp_test_driver.completion import (
-    BUILTIN_ALIASES,
-    BUILTIN_COMMANDS,
-    BUILTIN_NAMES,
-    BUILTIN_PREFIX,
     CompletionState,
     _get_readline,
     _readline_is_libedit,
@@ -54,37 +53,38 @@ SAMPLE_TOOLS: list[dict] = [
 ]
 
 
-class TestBuiltinCommands:
-    """Tests for builtin command definitions."""
+class TestRegistry:
+    """Tests for the builtin command registry."""
 
-    def test_all_commands_have_correct_prefix(self) -> None:
-        for canonical, alias, _desc in BUILTIN_COMMANDS:
-            assert canonical.startswith(BUILTIN_PREFIX)
-            if alias:
-                assert alias.startswith(BUILTIN_PREFIX)
+    def test_names_and_aliases_have_prefix(self) -> None:
+        for cmd in commands.REGISTRY.values():
+            assert cmd.name.startswith(BUILTIN_PREFIX)
+            if cmd.alias:
+                assert cmd.alias.startswith(BUILTIN_PREFIX)
 
-    def test_aliases_resolve_to_canonical(self) -> None:
-        for canonical, alias, _desc in BUILTIN_COMMANDS:
-            if alias:
-                assert BUILTIN_ALIASES[alias] == canonical
+    def test_aliases_resolve(self) -> None:
+        for alias, name in commands.ALIASES.items():
+            assert commands.resolve(alias) is commands.REGISTRY[name]
 
-    def test_canonical_names_in_set(self) -> None:
-        for canonical, _alias, _desc in BUILTIN_COMMANDS:
-            assert canonical in BUILTIN_NAMES
+    def test_alias_never_shadows_a_name(self) -> None:
+        assert not set(commands.ALIASES) & set(commands.REGISTRY)
 
-    def test_no_duplicate_aliases(self) -> None:
-        aliases = [alias for _, alias, _ in BUILTIN_COMMANDS if alias]
-        assert len(aliases) == len(set(aliases))
+    def test_core_commands_exist(self) -> None:
+        for name in ("/help", "/quit", "/list", "/send", "/raw", "/info"):
+            assert name in commands.REGISTRY
 
-    def test_no_duplicate_canonicals(self) -> None:
-        canonicals = [c for c, _, _ in BUILTIN_COMMANDS]
-        assert len(canonicals) == len(set(canonicals))
+    def test_every_command_in_a_known_group(self) -> None:
+        for cmd in commands.REGISTRY.values():
+            assert cmd.group in commands.GROUPS
 
-    def test_quit_exists(self) -> None:
-        assert "/quit" in BUILTIN_NAMES
+    def test_duplicate_registration_rejected(self) -> None:
+        with pytest.raises(ValueError):
+            commands.command("/help", summary="x", group="Session")(lambda r, s: None)
 
-    def test_help_exists(self) -> None:
-        assert "/help" in BUILTIN_NAMES
+    def test_display_tool_name(self) -> None:
+        assert commands.display_tool_name("/quit") == "quit"
+        assert commands.display_tool_name("a b") == "a_b"
+        assert commands.display_tool_name("\x1b[31mred") == "red"
 
 
 class TestCompletionState:
@@ -149,15 +149,84 @@ class TestCompletionState:
         assert "properties" in schema
 
 
+class _BufferRL:
+    """Fake readline exposing just what the completer reads."""
+
+    def __init__(self, line: str) -> None:
+        self.line = line
+
+    def get_line_buffer(self) -> str:
+        return self.line
+
+    def get_begidx(self) -> int:
+        return len(self.line) - len(self.line.split(" ")[-1])
+
+
+def _complete(state: CompletionState, line: str) -> list[str]:
+    completer = make_completer(state)
+    text = line.split(" ")[-1]
+    out = []
+    with patch("mcp_test_driver.completion._get_readline", return_value=_BufferRL(line)):
+        i = 0
+        while (m := completer(text, i)) is not None:
+            out.append(m)
+            i += 1
+    return out
+
+
 class TestMakeCompleter:
     """Tests for the completer function."""
 
-    def test_completer_returns_none_for_out_of_range(self) -> None:
+    def test_first_word_commands_and_tools(self) -> None:
         state = CompletionState.from_tools(SAMPLE_TOOLS)
-        completer = make_completer(state)
-        # Without readline context, we can't fully test, but we can check
-        # the function is callable
-        assert callable(completer)
+        assert _complete(state, "unicode_s") == ["unicode_search"]
+        assert "/describe" in _complete(state, "/de")
+
+    def test_tool_argument_keys(self) -> None:
+        state = CompletionState.from_tools(SAMPLE_TOOLS)
+        assert _complete(state, "unicode_search d") == ["detail="]
+
+    def test_enum_values(self) -> None:
+        state = CompletionState.from_tools(SAMPLE_TOOLS)
+        assert _complete(state, "unicode_search detail=f") == ["detail=full"]
+
+    def test_tool_command_argument(self) -> None:
+        state = CompletionState.from_tools(SAMPLE_TOOLS)
+        assert _complete(state, "/describe unicode_l") == ["unicode_lookup_char"]
+        assert _complete(state, "/d unicode_l") == ["unicode_lookup_char"]
+
+    def test_prompt_names_and_arguments(self) -> None:
+        prompts = [{"name": "greet", "arguments": [{"name": "who"}]}]
+        state = CompletionState.from_tools([], prompts=prompts)
+        assert _complete(state, "/prompt g") == ["greet"]
+        assert _complete(state, "/prompt greet w") == ["who="]
+
+    def test_resource_uris(self) -> None:
+        state = CompletionState.from_tools([], resources=[{"uri": "file:///a"}, {"uri": "mem://b"}])
+        assert _complete(state, "/read f") == ["file:///a"]
+
+    def test_command_words(self) -> None:
+        state = CompletionState.from_tools([])
+        assert _complete(state, "/complete p") == ["prompt"]
+        assert _complete(state, "/loglevel w") == ["warning"]
+
+    def test_method_names(self) -> None:
+        state = CompletionState.from_tools([])
+        assert "server/discover" in _complete(state, "/send server/")
+
+    def test_out_of_range_is_none(self) -> None:
+        state = CompletionState.from_tools(SAMPLE_TOOLS)
+        assert _complete(state, "zzz") == []
+
+    def test_titled_enum_values(self) -> None:
+        tools = [{"name": "t", "inputSchema": {"type": "object", "properties": {
+            "c": {"oneOf": [{"const": "r", "title": "Red"}, {"const": "g", "title": "Green"}]}}}}]
+        state = CompletionState.from_tools(tools)
+        assert state.arg_enums["t:c"] == ["r", "g"]
+
+    def test_real_name_mapping(self) -> None:
+        state = CompletionState.from_tools([{"name": "my tool", "inputSchema": {"type": "object"}}])
+        assert state.real_tool_name("my_tool") == "my tool"
 
 
 # ---------------------------------------------------------------------------
