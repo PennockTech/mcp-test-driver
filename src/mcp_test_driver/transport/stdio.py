@@ -33,6 +33,8 @@ from .base import (
 # While blocked waiting for stdout we wake this often to show stderr lines,
 # so they appear promptly but are printed by the main thread only.
 _STDERR_FLUSH_INTERVAL = 0.2
+# How long to wait, after the server closes stdout, for its exit status.
+EOF_EXIT_GRACE = 1.0
 
 
 def _frame(payload: Payload) -> bytes:
@@ -111,6 +113,17 @@ class StdioTransport:
 
     def returncode(self) -> int | None:
         return self._proc.poll() if self._proc else None
+
+    def _exit_status_after_eof(self) -> int | None:
+        # stdout reaches EOF a moment before the exit is reapable, so poll()
+        # alone often misses the status; a server that closed stdout but keeps
+        # running gets reported without one rather than holding us up.
+        if self._proc is None:
+            return None
+        try:
+            return self._proc.wait(timeout=EOF_EXIT_GRACE)
+        except subprocess.TimeoutExpired:
+            return None
 
     def close(self) -> None:
         if self._proc is None:
@@ -238,7 +251,7 @@ class StdioTransport:
                 self._buf.clear()
                 self._decode(line)
                 return
-            code = self.returncode()
+            code = self._exit_status_after_eof()
             detail = f" (exit status {code})" if code is not None else ""
             raise ConnectionClosed(f"Server closed its stdout{detail}")
         self._buf += chunk

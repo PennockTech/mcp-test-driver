@@ -65,6 +65,26 @@ class TestStdioTransport:
             t.receive()
         t.close()
 
+    def test_eof_before_exit_still_reports_status(self) -> None:
+        # stdout closes before the process exits; the status must not be lost.
+        t = StdioTransport(_python("import os, time; os.close(1); time.sleep(0.3)"), timeout=5)
+        t.trace = False
+        with pytest.raises(ConnectionClosed, match="exit status 0"):
+            t.receive()
+        t.close()
+
+    def test_eof_while_still_running_does_not_wait_long(self) -> None:
+        import time
+
+        t = StdioTransport(_python("import os, time; os.close(1); time.sleep(30)"), timeout=5)
+        t.trace = False
+        start = time.monotonic()
+        with pytest.raises(ConnectionClosed) as exc:
+            t.receive()
+        assert "exit status" not in str(exc.value)
+        assert time.monotonic() - start < 4
+        t.close()
+
     def test_timeout_even_on_partial_line(self) -> None:
         # A server that writes half a message and stalls must not hang us.
         code = "import sys,time; sys.stdout.write('{\"jsonrpc\"'); sys.stdout.flush(); time.sleep(30)"
