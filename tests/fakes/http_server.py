@@ -18,12 +18,17 @@ Extra scenario keys:
     documents        {path: json} served on GET (metadata, server cards)
     oauth            run a fake authorization server (see auth_server.py) and
                      require its tokens on the MCP endpoint
+    tls              {"certfile": ..., "keyfile": ...}: serve https
+    host             the name to put in origin/url (default 127.0.0.1); the
+                     server still listens on 127.0.0.1, so a made-up name is
+                     reachable only through the fake proxy (proxy_server.py)
 """
 
 from __future__ import annotations
 
 import json
 import queue
+import ssl
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
@@ -49,13 +54,18 @@ class FakeHttpServer:
         handler = _make_handler(self)
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
         self.httpd.daemon_threads = True
+        if "tls" in scenario:
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            ctx.load_cert_chain(scenario["tls"]["certfile"], scenario["tls"]["keyfile"])
+            self.httpd.socket = ctx.wrap_socket(self.httpd.socket, server_side=True)
         self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
         self.auth = FakeAuth(scenario["oauth"], self.origin) if "oauth" in scenario else None
 
     @property
     def origin(self) -> str:
         host, port = self.httpd.server_address[:2]
-        return f"http://{host}:{port}"
+        scheme = "https" if "tls" in self.scenario else "http"
+        return f"{scheme}://{self.scenario.get('host', host)}:{port}"
 
     @property
     def url(self) -> str:

@@ -111,6 +111,8 @@ mcp> unicode_lookup_char char=✓
 | `--header 'NAME: VALUE'` | Extra HTTP header (repeatable)                                  |
 | `--bearer-env VAR`       | Send `Authorization: Bearer $VAR`                               |
 | `--insecure`             | Skip TLS certificate verification (testing only)                |
+| `--ca-bundle PATH`       | Also trust these CAs (PEM file or directory); default `$MCP_TEST_DRIVER_CA_BUNDLE` |
+| `--proxy URL\|direct`    | HTTP(S) proxy for every non-loopback target, or `direct` to ignore proxy variables |
 
 ## Protocol eras
 
@@ -337,6 +339,49 @@ wiring up a model.
   backwards-compatibility section describes, or forced with
   `--transport sse`.  The POST endpoint must be on the same origin as the
   SSE URL.
+
+### Proxies and TLS trust
+
+Every HTTP request the driver makes (MCP traffic, metadata and OAuth
+fetches, server cards) follows the same proxy and certificate settings.
+
+**Proxies** come from the usual environment variables, as curl reads
+them: `https_proxy` for https targets, `http_proxy` for http, then
+`all_proxy`; the lowercase name wins over the uppercase one.  `no_proxy`
+lists exceptions: `*`, host names (`example.com` also covers its
+subdomains; `.example.com` and `*.example.com` mean the same), IP
+addresses, CIDR blocks such as `10.0.0.0/8`, each optionally with
+`:port`.  Host names are matched as written, never resolved.
+
+- `--proxy URL` overrides the variables (`no_proxy` still applies);
+  `--proxy direct` ignores them.
+- Loopback targets (`localhost`, `127.0.0.0/8`, `::1`) are never proxied.
+- `http://` and `https://` proxies are supported, with credentials in the
+  URL (`http://user:pass@proxy:3128`, percent-encoded as needed); they are
+  sent as `Proxy-Authorization` and never printed.  SOCKS is not
+  supported, and a SOCKS setting is an error rather than a silent direct
+  connection.
+- The start-up report shows the route (`network  proxy: … (from
+  HTTPS_PROXY)`), and connection errors name the proxy.
+
+**TLS trust**: `--ca-bundle PATH` (or `MCP_TEST_DRIVER_CA_BUNDLE`) adds the
+CA certificates in a PEM file, or an OpenSSL hashed directory, to the
+system trust store.  It covers both the server and an `https://` proxy.
+There is one bundle rather than one per hop because an intercepting proxy
+re-signs server certificates, so its CA must be trusted for the servers
+anyway.  To *replace* the system store instead, use OpenSSL's
+`SSL_CERT_FILE` / `SSL_CERT_DIR`, which are honoured as usual.
+
+```sh
+# Inspect traffic with mitmproxy:
+mcp-test-driver --proxy http://127.0.0.1:8080 \
+    --ca-bundle ~/.mitmproxy/mitmproxy-ca-cert.pem https://example.com/mcp
+
+# A sandbox (AI agents, CI) whose egress proxy re-signs TLS:
+export HTTPS_PROXY=http://127.0.0.1:3128
+export MCP_TEST_DRIVER_CA_BUNDLE=/path/to/sandbox-ca.pem
+mcp-test-driver https://example.com/mcp
+```
 
 ## Authorization
 

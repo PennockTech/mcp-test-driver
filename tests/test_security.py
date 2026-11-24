@@ -309,3 +309,21 @@ class TestPagination:
         s.initialize()
         assert [x["name"] for x in s.list_tools()] == [f"t{i}" for i in range(5)]
         t.close()
+
+
+def test_http_clients_only_built_in_net() -> None:
+    """Every outbound HTTP client must honour the proxy and CA settings."""
+    import re
+    from pathlib import Path
+
+    src = Path(__file__).resolve().parent.parent / "src" / "mcp_test_driver"
+    pattern = re.compile(r"\b(PoolManager|ProxyManager|HTTPS?ConnectionPool|connection_from_url)\("
+                         r"|^\s*(import|from)\s+(urllib\.request|http\.client|requests|httpx)\b")
+    offenders = [
+        f"{path.relative_to(src)}:{n}"
+        for path in src.rglob("*.py") if path.name != "net.py"
+        for n, line in enumerate(path.read_text().splitlines(), 1)
+        if pattern.search(line)
+    ]
+    assert offenders == [], "build HTTP clients with net.HttpClient: " + ", ".join(offenders)
+

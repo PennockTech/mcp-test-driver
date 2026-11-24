@@ -16,6 +16,7 @@ from .completion import (
     setup_readline,
 )
 from .diagnostics import Level, print_findings
+from .net import NetConfig
 from .parse import parse_args
 from .protocol import McpError, RequestCancelled
 from .render import render_error, render_response
@@ -123,9 +124,10 @@ class SessionCache:
 class Repl:
     """Interactive REPL for MCP tool invocation."""
 
-    def __init__(self, session: McpSession, *, cache: SessionCache | None = None, verify_tls: bool = True) -> None:
+    def __init__(self, session: McpSession, *, cache: SessionCache | None = None, net: NetConfig | None = None) -> None:
         self.session = session
-        self.verify_tls = verify_tls
+        # Settings for fetches the REPL makes itself (metadata, server cards).
+        self.net: NetConfig | None = net if net is not None else getattr(session.transport, "net", None)
         self.cache = cache if cache is not None else SessionCache.build(session)
         self.trace_enabled = session.transport.trace
         self.last_response: dict[str, Any] | None = None

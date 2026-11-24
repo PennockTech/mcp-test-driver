@@ -8,10 +8,12 @@ import argparse
 import json
 import os
 import sys
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from . import versions
+from .net import NetConfig
 
 if TYPE_CHECKING:
     from .protocol import McpSession
@@ -34,6 +36,7 @@ examples:
   mcp-test-driver --protocol-version 2025-06-18 my-server --stdio
   mcp-test-driver --header 'X-Api-Key: abc' https://example.com/mcp
   TOKEN=... mcp-test-driver --bearer-env TOKEN https://example.com/mcp
+  mcp-test-driver --proxy http://127.0.0.1:8080 --ca-bundle ~/.mitmproxy/mitmproxy-ca-cert.pem https://example.com/mcp
 
 known protocol revisions: {", ".join(versions.KNOWN_VERSIONS)}
 """
@@ -97,6 +100,12 @@ def build_parser() -> argparse.ArgumentParser:
                    help="send 'Authorization: Bearer $VAR' (keeps the token out of argv)")
     g.add_argument("--insecure", action="store_true",
                    help="do not verify TLS certificates (testing only)")
+    g.add_argument("--ca-bundle", metavar="PATH",
+                   help="also trust the CA certificates in this PEM file or directory, for servers and "
+                        "proxies (default: $MCP_TEST_DRIVER_CA_BUNDLE)")
+    g.add_argument("--proxy", metavar="URL",
+                   help="HTTP(S) proxy for all non-loopback targets, or 'direct' to ignore the "
+                        "environment; default: https_proxy / http_proxy / all_proxy, minus no_proxy")
 
     g = p.add_argument_group("non-interactive")
     g.add_argument("--exec", "-c", action="append", metavar="LINE",
@@ -200,6 +209,8 @@ def make_transport(args: argparse.Namespace) -> Transport:
 
     target: list[str] = args.target
     timeout = args.timeout or DEFAULT_TIMEOUT
+    # Built here (not only for HTTP targets) because OAuth and the REPL use it too.
+    args.net = NetConfig.from_env(proxy=args.proxy, ca_bundle=args.ca_bundle, insecure=args.insecure)
     is_url = target[0].startswith(("http://", "https://"))
     kind = args.transport if args.transport != "auto" else ("http" if is_url else "stdio")
     if kind in ("http", "sse"):
@@ -212,7 +223,7 @@ def make_transport(args: argparse.Namespace) -> Transport:
                 raise ValueError(f"environment variable {args.bearer_env} is empty or unset")
             headers["Authorization"] = f"Bearer {token}"
         cls = LegacySseTransport if kind == "sse" else HttpTransport
-        transport: Transport = cls(target[0], verify_tls=not args.insecure, timeout=timeout, extra_headers=headers)
+        transport: Transport = cls(target[0], net=args.net, timeout=timeout, extra_headers=headers)
     else:
         if args.header or args.bearer_env:
             print("Note: --header/--bearer-env have no effect on stdio; pass credentials "
@@ -288,7 +299,7 @@ def run_session(transport: Transport, args: argparse.Namespace, holder: list[Tra
     except ConnectionError as e:
         print(f"Connection error: {e}", file=sys.stderr)
         sys.exit(2 if batch else 1)
-    repl = Repl(session, verify_tls=not args.insecure)
+    repl = Repl(session, net=args.net)
     if batch:
         sys.exit(run_batch(session, repl, args))
     if args.conformance_client:
@@ -471,8 +482,8 @@ def attach_oauth(session: McpSession, args: argparse.Namespace) -> None:
     from .oauth import headless_open
 
     setattr(transport, "auth", OAuthClient(
-        url, options, session.findings, fetcher=JsonFetcher(verify_tls=not args.insecure),
-        open_url=headless_open if getattr(args, "headless_auth", False) else None,
+        url, options, session.findings, fetcher=JsonFetcher(net=args.net),
+        open_url=partial(headless_open, net=args.net) if getattr(args, "headless_auth", False) else None,
     ))
 
 
@@ -487,7 +498,7 @@ def report_auth(session: McpSession, err: AuthRequiredError) -> None:
         return
     print("The server requires authorization.  Discovery:", file=sys.stderr)
     disc = discover(url, err.www_authenticate or None, session.findings,
-                    JsonFetcher(verify_tls=getattr(session.transport, "verify_tls", True)),
+                    JsonFetcher(net=getattr(session.transport, "net", None)),
                     protocol_version=session.state.version)
     for line in describe(disc):
         print(f"  {line}", file=sys.stderr)

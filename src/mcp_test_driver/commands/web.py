@@ -31,7 +31,7 @@ def auth_discover(repl: Repl) -> Any:
     url = _http_url(repl)
     if url is None:
         return None
-    fetcher = JsonFetcher(verify_tls=repl.verify_tls)
+    fetcher = JsonFetcher(net=repl.net)
     disc = discover(url, repl.session.last_www_authenticate, repl.session.findings, fetcher,
                     protocol_version=repl.session.state.version)
     print(bold("OAuth discovery"))
@@ -51,7 +51,7 @@ def _oauth_client(repl: Repl, create: bool) -> Any:
         if url is None:
             return None
         auth = OAuthClient(url, OAuthOptions(), repl.session.findings,
-                           fetcher=JsonFetcher(verify_tls=repl.verify_tls),
+                           fetcher=JsonFetcher(net=repl.net),
                            protocol_version=repl.session.state.version)
         setattr(transport, "auth", auth)
     return auth
@@ -119,7 +119,7 @@ def cmd_server_card(repl: Repl, rest: str) -> None:
     url = rest.strip() or _http_url(repl)
     if not url:
         return
-    fetcher = JsonFetcher(verify_tls=repl.verify_tls)
+    fetcher = JsonFetcher(net=repl.net)
     for label, doc_url in _card_urls(url):
         got = fetcher.get(doc_url)
         print(f"{bold(label)}: {sanitize(doc_url)} → {got.describe()}")
