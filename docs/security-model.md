@@ -35,7 +35,19 @@ remote (HTTPS).  A malicious server may attempt:
   `SessionExpiredError`, signaling the client to re-initialize.
 - **Separate timeouts**: 10s connect, 60s read (via `urllib3.util.Timeout`).
 - **TLS verification**: On by default.  `--insecure` disables it for
-  testing with self-signed certs.
+  testing with self-signed certs.  `--ca-bundle` only *adds* trusted CAs
+  to the system store; it never removes any.
+- **One place for HTTP clients** (net.py): every outbound request goes
+  through `net.HttpClient`, so proxy and trust settings cannot be bypassed;
+  a test fails if another module builds a urllib3 pool.
+- **Proxies**: a proxy sees everything sent to `http://` targets, and an
+  intercepting (TLS re-signing) proxy sees `https://` traffic too,
+  including bearer tokens; only use one you control.  Loopback targets are
+  never proxied, so local servers and the OAuth redirect listener stay
+  local.  Proxy credentials go only in `Proxy-Authorization` and are
+  redacted wherever the proxy URL is shown.  An unusable proxy setting
+  (SOCKS, a bad URL) fails the request instead of silently connecting
+  directly.
 - **Header injection**: user-supplied headers (`--header`, `/header`) and
   every header we build are checked for CR, LF and NUL before sending.
 - **Credentials**: `--bearer-env` reads the token from the environment so

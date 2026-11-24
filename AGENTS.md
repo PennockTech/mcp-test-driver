@@ -36,12 +36,13 @@ src/mcp_test_driver/
   render.py      # rendering results and content blocks (sanitized)
   sanitize.py    # sanitize() / safe_json() for all server-supplied text
   fetch.py       # narrow JSON fetcher for server-supplied URLs (SSRF limits)
+  net.py         # proxy selection and TLS trust; the only builder of HTTP clients
   auth_diag.py   # OAuth discovery (PRM, AS metadata) and checks
   oauth.py       # OAuth client: PKCE, CIMD/DCR, refresh, step-up, token cache
   parse.py       # key=value argument parsing for the REPL
   color.py       # ANSI color helpers
 tests/           # pytest suite, mirrors src/ module-for-module
-  fakes/         # scenario-driven fake MCP servers (stdio, HTTP, OAuth, in-memory)
+  fakes/         # scenario-driven fakes: MCP servers (stdio, HTTP, OAuth, in-memory), HTTP proxy
   integration/   # opt-in tests against real SDK servers (MCPTD_INTEGRATION=1)
 docs/            # security model, MCP spec notes, feature matrix, roadmap
   specs/         # vendored upstream MCP schemas + conformance lists (do not edit)
@@ -152,7 +153,10 @@ scenario keys); extend those rather than mocking transports.
   `docs/specs/`; re-run `scripts/fetch-specs.sh`.  The planned work is
   in `docs/roadmap-multi-version.md`.
 - **HTTP transport**: respect existing SSRF and redirect-handling logic
-  in `transport.py`.
+  in `transport/http.py` and `fetch.py`.
+- **Outbound HTTP**: build clients only with `net.HttpClient` (from the
+  session's `NetConfig`), never a bare urllib3 pool, so proxy and CA
+  settings apply everywhere; `tests/test_security.py` enforces this.
 - **JSON-RPC IDs**: do not reuse or guess IDs; the dispatcher matches
   responses by ID.
 - **Never gate features on the negotiated revision.**  The revision picks

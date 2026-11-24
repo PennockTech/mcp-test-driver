@@ -129,7 +129,7 @@ def switch_to_legacy_sse(session: McpSession) -> None:
     url = getattr(old, "url")
     new = LegacySseTransport(
         url,
-        verify_tls=getattr(old, "verify_tls", True),
+        net=getattr(old, "net", None),
         timeout=getattr(old, "timeout", 120.0),
         extra_headers=old.wire.extra_headers,
     )

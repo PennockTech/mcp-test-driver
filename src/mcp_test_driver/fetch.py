@@ -9,7 +9,6 @@ size cap, and no credentials sent unless the caller passes them.
 
 from __future__ import annotations
 
-import ipaddress
 import json
 from dataclasses import dataclass
 from typing import Any
@@ -19,6 +18,7 @@ import urllib3
 import urllib3.exceptions
 import urllib3.util
 
+from .net import HttpClient, NetConfig, describe_error, is_loopback
 from .sanitize import sanitize
 
 MAX_METADATA_BYTES = 1024 * 1024
@@ -45,17 +45,6 @@ class Fetched:
         return "ok" if self.data is not None else "not JSON"
 
 
-def is_loopback(host: str | None) -> bool:
-    if not host:
-        return False
-    if host == "localhost" or host.endswith(".localhost"):
-        return True
-    try:
-        return ipaddress.ip_address(host.strip("[]")).is_loopback
-    except ValueError:
-        return False
-
-
 def url_allowed(url: str) -> str | None:
     """None if we may fetch url, else the reason not to."""
     parts = urlsplit(url)
@@ -76,11 +65,11 @@ def same_origin(a: str, b: str) -> bool:
 
 
 class JsonFetcher:
-    def __init__(self, *, verify_tls: bool = True, timeout: float = FETCH_TIMEOUT) -> None:
-        self._pool = urllib3.PoolManager(
+    def __init__(self, *, net: NetConfig | None = None, timeout: float = FETCH_TIMEOUT) -> None:
+        self._pool = HttpClient(
+            net,
             retries=urllib3.util.Retry(total=1, redirect=0),
             timeout=urllib3.util.Timeout(connect=timeout, read=timeout),
-            cert_reqs="CERT_REQUIRED" if verify_tls else "CERT_NONE",
         )
 
     def get(self, url: str, headers: dict[str, str] | None = None) -> Fetched:
@@ -93,7 +82,7 @@ class JsonFetcher:
                 preload_content=False, redirect=False,
             )
         except urllib3.exceptions.HTTPError as e:
-            return Fetched(url, None, error=f"fetch failed: {e}")
+            return Fetched(url, None, error=f"fetch failed: {_reason(self._pool, url, e)}")
         try:
             ctype = resp.headers.get("Content-Type", "")
             if 300 <= resp.status < 400:
@@ -130,7 +119,7 @@ class JsonFetcher:
             resp = self._pool.request("POST", url, body=body, headers={"Accept": "application/json", **headers},
                                       preload_content=False, redirect=False)
         except urllib3.exceptions.HTTPError as e:
-            return Fetched(url, None, error=f"request failed: {e}")
+            return Fetched(url, None, error=f"request failed: {_reason(self._pool, url, e)}")
         try:
             raw = resp.read(MAX_METADATA_BYTES + 1)
             data = None
@@ -142,3 +131,8 @@ class JsonFetcher:
             return Fetched(url, resp.status, data, content_type=resp.headers.get("Content-Type", ""))
         finally:
             resp.release_conn()
+
+
+def _reason(pool: HttpClient, url: str, e: urllib3.exceptions.HTTPError) -> str:
+    inner = e.reason if isinstance(e, urllib3.exceptions.MaxRetryError) and e.reason else e
+    return describe_error(pool, url, inner)

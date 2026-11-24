@@ -37,7 +37,7 @@ class LegacySseTransport(HttpTransport):
         self.connect()
 
     def describe(self) -> str:
-        return f"HTTP+SSE (2024-11-05, deprecated): {self.url} → POST {self.endpoint or '?'}"
+        return f"HTTP+SSE (2024-11-05, deprecated): {self.url} → POST {self.endpoint or '?'}{self.via()}"
 
     def post_url(self) -> str:
         if self.endpoint is None:

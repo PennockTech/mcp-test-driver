@@ -36,6 +36,7 @@ import urllib3.util
 
 from ..color import bold_err, eprint, red
 from ..messages import Payload, expand
+from ..net import HttpClient, NetConfig, ProxyConfigError, describe_error, redact_url
 from ..sanitize import sanitize
 from .base import (
     DEFAULT_TIMEOUT,
@@ -113,14 +114,14 @@ class HttpTransport:
         self,
         url: str,
         *,
-        verify_tls: bool = True,
+        net: NetConfig | None = None,
         timeout: float = DEFAULT_TIMEOUT,
         extra_headers: Mapping[str, str] | None = None,
     ) -> None:
         self.url = url
         self.trace = True
         self.timeout = timeout
-        self.verify_tls = verify_tls
+        self.net = net if net is not None else NetConfig.from_env()
         self.wire = WireProfile()
         for k, v in (extra_headers or {}).items():
             check_header(k, v)
@@ -138,11 +139,20 @@ class HttpTransport:
         self.primed_streams = 0
         self.last_status: int | None = None
         self.last_headers: dict[str, str] = {}
-        self._pool = urllib3.PoolManager(
+        self._pool = HttpClient(
+            self.net,
             retries=urllib3.util.Retry(total=3, redirect=0),
             timeout=urllib3.util.Timeout(connect=HTTP_CONNECT_TIMEOUT, read=timeout),
-            cert_reqs="CERT_REQUIRED" if verify_tls else "CERT_NONE",
         )
+
+    @property
+    def verify_tls(self) -> bool:
+        return self.net.verify_tls
+
+    def via(self) -> str:
+        """' via proxy …' when requests to the server are proxied, else ''."""
+        route = self._pool.route_for(self.url)
+        return f" via proxy {redact_url(route.proxy)}" if route.proxy else ""
 
     # ── headers ────────────────────────────────────────────────────────
 
@@ -151,7 +161,7 @@ class HttpTransport:
         return self._session_id
 
     def describe(self) -> str:
-        return f"Streamable HTTP: {self.url}"
+        return f"Streamable HTTP: {self.url}{self.via()}"
 
     def base_headers(self) -> dict[str, str]:
         h = dict(self.wire.extra_headers)
@@ -203,12 +213,9 @@ class HttpTransport:
                 **kw,
             )
         except urllib3.exceptions.MaxRetryError as e:
-            reason = e.reason
-            if isinstance(reason, urllib3.exceptions.SSLError):
-                raise TransportError(f"TLS/certificate error connecting to {url or self.url}: {reason}") from None
-            raise TransportError(f"Connection failed: {reason}") from None
-        except urllib3.exceptions.SSLError as e:
-            raise TransportError(f"TLS/certificate error: {e}") from None
+            raise TransportError(describe_error(self._pool, url or self.url, e.reason or e)) from None
+        except (urllib3.exceptions.SSLError, urllib3.exceptions.ProxyError, ProxyConfigError) as e:
+            raise TransportError(describe_error(self._pool, url or self.url, e)) from None
         except urllib3.exceptions.HTTPError as e:
             raise TransportError(f"HTTP error: {e}") from None
 

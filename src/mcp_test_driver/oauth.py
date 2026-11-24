@@ -52,6 +52,7 @@ from .auth_diag import (
 from .color import bold, cyan, dim, eprint, red, yellow
 from .diagnostics import DiagnosticLog, Level
 from .fetch import Fetched, JsonFetcher
+from .net import HttpClient, NetConfig
 from .messages import as_obj
 from .sanitize import sanitize, sanitize_any
 from .transport.base import TransportError
@@ -142,15 +143,13 @@ def _basic(client_id: str, secret: str) -> str:
     return "Basic " + base64.b64encode(raw).decode()
 
 
-def headless_open(url: str) -> None:
+def headless_open(url: str, net: NetConfig | None = None) -> None:
     """Stand in for a browser when the AS approves without asking (test harnesses).
 
     Requests the authorization URL and delivers its redirect to our loopback
     listener.  Only a redirect to a loopback address is followed.
     """
-    import urllib3
-
-    pool = urllib3.PoolManager()
+    pool = HttpClient(net)
     resp = pool.request("GET", url, redirect=False)
     location = resp.headers.get("Location")
     if location and urlsplit(location).hostname in ("127.0.0.1", "localhost", "::1"):

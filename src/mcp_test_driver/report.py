@@ -63,6 +63,11 @@ def print_report(
 
     print(bold("Connection"))
     print(f"  transport  {sanitize(session.transport.describe())}")
+    net = getattr(session.transport, "net", None)
+    url = getattr(session.transport, "url", None)
+    if net is not None and url:
+        for line in net.describe(url):
+            print(f"  network    {sanitize(line)}")
     if session.transport.session_id:
         print(f"  session    Mcp-Session-Id {sanitize(session.transport.session_id)}")
     era = "stateless (modern)" if state.era == "modern" else "initialize handshake"
