@@ -88,6 +88,7 @@ jobs:
 
 
   build:
+    needs: plan-release
     name: Build release assets
 
     runs-on: ubuntu-slim
@@ -114,6 +115,22 @@ jobs:
 
       - name: Install the project
         run: uv sync --locked --all-extras --dev
+
+      # PyPI gets whatever pyproject.toml says, so refuse a tag that disagrees
+      # (a hand-made tag, or a manual run against the wrong commit).  uv's own
+      # normalisation maps the tag's semver form to PEP 440 (v0.3.0-rc1 -> 0.3.0rc1).
+      - name: Check the tag matches the project version
+        run: |
+          set -eu
+          want="$(uv version --dry-run --short "${RELEASE_TAG#v}")"
+          have="$(uv version --short)"
+          if [ "$want" != "$have" ]; then
+            echo "::error::tag ${RELEASE_TAG} means version ${want}, but pyproject.toml has ${have}"
+            exit 1
+          fi
+          echo "Releasing ${have} for tag ${RELEASE_TAG}"
+        env:
+          RELEASE_TAG: ${{ needs.plan-release.outputs.release-tag }}
 
       - name: Build
         run: uv build --no-sources
