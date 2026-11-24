@@ -5,17 +5,17 @@
 
 ## Status (2026-11-12): all phases implemented
 
-| Phase | Commit(s) on the feature branch |
+| Phase | Commit(s), by subject |
 |---|---|
-| 0 Specs, feature matrix, this roadmap | `4d2aa62` |
-| Step A GitHub Pages CIMD document | `e8aa191` |
-| 1–2 Core rebuild, negotiation, diagnostics | `033cdf7` |
-| 3 Elicitation, sampling, progress | `ed961fa` |
-| 4 2026-07-28 stateless protocol, dual-era negotiation | `a813414` |
-| 5 HTTP+SSE fallback, OAuth discovery, server cards, `--otel` | `99900d8` |
-| 6 OAuth login | `6671a5a` |
-| 7 Probing, `--check`, conformance client | `ab3f745` |
-| 8 Tasks, MCP Apps, skills, extensions, docs | `6d0ef23` |
+| 0 Specs, feature matrix, this roadmap | “docs: vendor MCP specs, add feature matrix and multi-version roadmap” |
+| Step A GitHub Pages CIMD document | “Publish the OAuth client metadata document via GitHub Pages” (PR #2), “Add the OAuth client ID constant and checks for the Pages document” |
+| 1–2 Core rebuild, negotiation, diagnostics | “Rebuild the core for multi-revision MCP: transports, session, commands” |
+| 3 Elicitation, sampling, progress | “Answer elicitation and sampling requests interactively; progress tokens” |
+| 4 2026-07-28 stateless protocol, dual-era negotiation | “Speak the 2026-07-28 stateless protocol; dual-era negotiation” |
+| 5 HTTP+SSE fallback, OAuth discovery, server cards, `--otel` | “HTTP+SSE fallback, OAuth discovery diagnostics, server cards, --otel” |
+| 6 OAuth login | “OAuth login: authorization code + PKCE, client credentials, device grant” |
+| 7 Probing, `--check`, conformance client | “Probing, conformance checks, scripted runs; pass the official client suite” |
+| 8 Tasks, MCP Apps, skills, extensions, docs | “Add tasks, MCP Apps, skills and extension support; finish docs” |
 
 Verification: about 510 unit/end-to-end tests against scenario-driven fake
 servers; opt-in integration tests against the official Python SDK (both
@@ -344,7 +344,7 @@ Existing modules that change:
 
 ## Phases (each must pass `uv run ruff check`, `uv run ty check`, `uv run pytest`)
 
-0. **Specs and docs, no code changes. (Done: `4d2aa62`.)**
+0. **Specs and docs, no code changes. (Done.)**
    - Add `scripts/fetch-specs.sh`, which pulls `schema/<ver>/schema.json` (and `schema.ts`) for every released version, plus `draft`, from `raw.githubusercontent.com`. It records the upstream commit SHA and date in `docs/specs/README.md`.
    - The same script also pulls the conformance suite's `requirements/*.yaml` into `docs/specs/conformance/`.
    - Commit the files under `docs/specs/<ver>/`.
@@ -399,7 +399,7 @@ Existing modules that change:
 
 ## Execution (approved 2026-11-12: implement every phase)
 
-Phase 0 is done (commit `4d2aa62`).
+Phase 0 is done.
 
 **Branch and commits:**
 
