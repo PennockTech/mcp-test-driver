@@ -31,5 +31,6 @@ shipped these names, so they could change freely.
 ## Consequences
 
 - A third era gets its own descriptive name; these two stay true.
+- `--help` shows each era's revision range, built from `versions.py`.
 - This file is the only place the retired words appear outside the
   vendored specs.

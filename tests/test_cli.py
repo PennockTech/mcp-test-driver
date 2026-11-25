@@ -32,6 +32,22 @@ class TestHelp:
         assert "usage:" in r.stdout and "--protocol-version" in r.stdout
         assert "2026-07-28" in r.stdout
 
+    def test_era_help_is_a_table_dated_from_the_registry(self) -> None:
+        text = cli.build_parser().format_help()
+        rows = [line.strip() for line in text.splitlines()]
+        assert "handshake  initialize only, 2024-11-05 to 2025-11-25" in rows
+        assert "stateless  per-request _meta only, from 2026-07-28" in rows
+
+    def test_help_rows_wrap_under_their_description(self) -> None:
+        fmt = cli._HelpFormatter("prog")
+        assert fmt._split_lines("intro\n  key  one two three four", 16) == [
+            "intro",
+            "  key  one two",
+            "       three",
+            "       four",
+        ]
+        assert fmt._split_lines("a plain sentence that is reflowed", 18) == ["a plain sentence", "that is reflowed"]
+
     def test_no_args_shows_usage(self) -> None:
         r = _run([])
         assert r.returncode == 1 and "usage:" in r.stdout

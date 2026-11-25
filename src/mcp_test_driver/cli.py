@@ -7,7 +7,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
+import textwrap
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -42,12 +44,46 @@ known protocol revisions: {", ".join(versions.KNOWN_VERSIONS)}
 """
 
 
+_TABLE_ROW = re.compile(r" +\S+ {2,}")
+
+
+class _HelpFormatter(argparse.RawDescriptionHelpFormatter):
+    """Wrap option help to the terminal, keeping the line breaks and indentation we wrote.
+
+    argparse offers only all or nothing: reflow every help string into one
+    paragraph, or wrap none of them.  Options that take one of a few values
+    read best as a small table, so each written line is wrapped on its own.
+    """
+
+    def _split_lines(self, text: str, width: int) -> list[str]:
+        lines: list[str] = []
+        for line in text.splitlines():
+            # "  value  what it means": continuation lines hang under the meaning.
+            row = _TABLE_ROW.match(line)
+            hang = " " * (row.end() if row else len(line) - len(line.lstrip(" ")))
+            lines.extend(textwrap.wrap(line.strip(), width, initial_indent=line[: len(line) - len(line.lstrip(" "))],
+                                       subsequent_indent=hang) or [""])
+        return lines
+
+
+def _era_help() -> str:
+    # The date ranges come from the registry, so a new revision updates them.
+    handshake, stateless = versions.HANDSHAKE_VERSIONS, versions.STATELESS_VERSIONS
+    return (
+        "protocol era to speak\n"
+        "  auto       probe server/discover, else initialize\n"
+        f"  handshake  initialize only, {handshake[0]} to {handshake[-1]}\n"
+        f"  stateless  per-request _meta only, from {stateless[0]}\n"
+        "default: auto"
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="mcp-test-driver",
         description=DESCRIPTION,
         epilog=EPILOG,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
+        formatter_class=_HelpFormatter,
     )
     from . import __version__
 
@@ -63,11 +99,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     g = p.add_argument_group("protocol")
     g.add_argument("--protocol-version", metavar="REV",
-                   help=f"revision to offer or request (default: {versions.LATEST_STATELESS} for "
-                   f"stateless requests, {versions.LATEST_HANDSHAKE} for initialize)")
-    g.add_argument("--era", choices=("auto", "handshake", "stateless"), default="auto",
-                   help="auto (default): probe with server/discover, falling back to initialize; "
-                   "handshake: initialize only; stateless: stateless requests (2026-07-28+) only")
+                   help="revision to offer or request\n"
+                   f"  default: {versions.LATEST_STATELESS} (stateless era)\n"
+                   f"           {versions.LATEST_HANDSHAKE} (handshake era)")
+    g.add_argument("--era", choices=("auto", "handshake", "stateless"), default="auto", help=_era_help())
     g.add_argument("--probe-timeout", type=float, default=5.0, metavar="SECS",
                    help="how long --era auto waits for a server/discover reply (default 5)")
     g.add_argument("--timeout", type=float, default=None, metavar="SECS",
@@ -90,8 +125,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     g = p.add_argument_group("transport")
     g.add_argument("--transport", choices=("auto", "stdio", "http", "sse"), default="auto",
-                   help="force a transport: stdio, http (Streamable HTTP), or sse (the deprecated "
-                   "2024-11-05 HTTP+SSE); auto falls back from http to sse when needed")
+                   help="transport to use (default: auto)\n"
+                   "  auto   command: stdio; URL: http, then sse\n"
+                   "  stdio  run the target as a subprocess\n"
+                   "  http   Streamable HTTP, from 2025-03-26\n"
+                   "  sse    HTTP+SSE, 2024-11-05 (deprecated)")
     g.add_argument("--no-listen", dest="listen", action="store_false",
                    help="don't open the HTTP GET listening stream after initialize (2025-03-26 to 2025-11-25)")
     g.add_argument("--header", action="append", default=[], metavar="'NAME: VALUE'",
@@ -123,7 +161,10 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--oauth", action="store_true",
                    help="log in with OAuth when the server asks (authorization code + PKCE)")
     g.add_argument("--auth-flow", choices=("code", "client-credentials", "device"),
-                   help="OAuth flow to use (implies --oauth)")
+                   help="OAuth flow to use, default code (implies --oauth)\n"
+                   "  code                authorization code + PKCE\n"
+                   "  client-credentials  no user; needs a client secret\n"
+                   "  device              RFC 8628, for headless machines")
     g.add_argument("--client-id", metavar="ID", help="pre-registered OAuth client ID")
     g.add_argument("--client-secret-env", metavar="VAR", help="environment variable holding the client secret")
     g.add_argument("--client-metadata-url", metavar="URL",
