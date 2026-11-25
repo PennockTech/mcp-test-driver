@@ -16,7 +16,7 @@ to **2026-07-28** (the latest).
   - The client sends `notifications/initialized`.
   - The negotiated version and capabilities then hold for the connection
     (stdio) or the `Mcp-Session-Id` session (HTTP).
-- **Modern / stateless era** (2026-07-28 onwards; SEP-2575, SEP-2567):
+- **Stateless era** (2026-07-28 onwards; SEP-2575, SEP-2567):
   - There is no handshake and there are no sessions.
   - Every request carries these keys in `params._meta`:
     - `io.modelcontextprotocol/protocolVersion` (required)
@@ -35,24 +35,25 @@ to **2026-07-28** (the latest).
 From the backward-compatibility sections of `2026-07-28/basic/versioning`
 and the two transport pages:
 
-- **stdio:** send `server/discover` first, with the preferred modern
-  version in `_meta`.
-  - A `DiscoverResult` means modern.
-  - A recognized modern error (`-32022`) means modern: retry with a
-    supported version, and do **not** fall back.
+- **stdio:** send `server/discover` first, with the preferred
+  stateless-era version in `_meta`.
+  - A `DiscoverResult` means the stateless era.
+  - A recognized stateless-era error (`-32022`) means the same: retry
+    with a supported version, and do **not** fall back.
   - Any other error, or no response within a reasonable timeout, means
-    legacy: fall back to `initialize`.
-  - The fallback must not be keyed to one specific error code. Legacy
-    servers answer unknown pre-`initialize` requests with various codes,
-    or not at all.
-- **Streamable HTTP:** send a modern request.
-  - Success, or a `400` whose body is a recognized modern error, means modern.
-  - Any other `4xx` means legacy: send `initialize`.
+    a handshake-era server: fall back to `initialize`.
+  - The fallback must not be keyed to one specific error code.
+    Handshake-era servers answer unknown pre-`initialize` requests with
+    various codes, or not at all.
+- **Streamable HTTP:** send a stateless request.
+  - Success, or a `400` whose body is a recognized stateless-era error,
+    means the stateless era.
+  - Any other `4xx` means the handshake era: send `initialize`.
   - If that fails too, try the deprecated HTTP+SSE transport.
 - Cache the result per server process (stdio) or per origin (HTTP).
 - A dual-era *server* picks its behaviour from how the client opens:
-  modern `_meta` gets stateless handling, and `initialize` gets the legacy
-  semantics for that process or session.
+  per-request `_meta` gets stateless handling, and `initialize` gets the
+  handshake semantics for that process or session.
 
 ## Server-to-client interaction
 

@@ -390,7 +390,7 @@ class HttpTransport:
             self._q.put(("end", s, None))
 
     def _handle_event(self, s: Stream, ev: SseEvent) -> None:
-        """Non-"message" SSE events.  Subclasses (legacy SSE) override."""
+        """Non-"message" SSE events.  Subclasses (HTTP+SSE) override."""
         if self.trace:
             trace_info(f"SSE event {sanitize(ev.event)!r} ignored")
 

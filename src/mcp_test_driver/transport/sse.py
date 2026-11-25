@@ -3,7 +3,7 @@
 """Server-Sent Events parsing (WHATWG HTML "event stream" rules).
 
 Shared by Streamable HTTP response streams, the HTTP GET listening stream,
-and the legacy 2024-11-05 HTTP+SSE transport.
+and the 2024-11-05 HTTP+SSE transport.
 """
 
 from __future__ import annotations

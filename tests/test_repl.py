@@ -170,7 +170,7 @@ class TestCommands:
         r = make_repl()
         r.handle_line("/loglevel warning")
         assert any(m.get("method") == "logging/setLevel" for m in read_log(log_path))
-        r.session.state.era = "modern"
+        r.session.state.era = "stateless"
         r.handle_line("/loglevel debug")
         assert r.session.log_level == "debug"
 

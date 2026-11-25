@@ -10,7 +10,7 @@ Extra scenario keys:
                      response; GET with Last-Event-ID continues it
     sse_retry_ms     send this SSE retry field before closing a dropped stream
     get_events       accept GET: send these messages, then keep the stream open
-    legacy_sse       act as a 2024-11-05 HTTP+SSE server: GET /mcp streams, the
+    http_sse         act as a 2024-11-05 HTTP+SSE server: GET /mcp streams, the
                      first event names the POST endpoint; POST /mcp gives 405
     endpoint         the endpoint event's data (default "/messages?sid=1")
     require_bearer   reject requests without "Authorization: Bearer <this>" (401)
@@ -50,7 +50,7 @@ class FakeHttpServer:
         self.event_counts: dict[str, int] = {}
         self.streams_opened = 0
         self.stopping = threading.Event()
-        self.legacy_out: queue.Queue[Any] = queue.Queue()
+        self.http_sse_out: queue.Queue[Any] = queue.Queue()
         handler = _make_handler(self)
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
         self.httpd.daemon_threads = True
@@ -166,14 +166,14 @@ def _make_handler(server: FakeHttpServer) -> type[BaseHTTPRequestHandler]:
                 return True
             return False
 
-        def _legacy_stream(self) -> None:
+        def _http_sse_stream(self) -> None:
             self._sse_start()
             endpoint = s.get("endpoint", "/messages?sid=1")
             self.wfile.write(f"event: endpoint\ndata: {endpoint}\n\n".encode())
             self.wfile.flush()
             while not server.stopping.is_set():
                 try:
-                    msg = server.legacy_out.get(timeout=0.2)
+                    msg = server.http_sse_out.get(timeout=0.2)
                 except queue.Empty:
                     continue
                 try:
@@ -183,7 +183,7 @@ def _make_handler(server: FakeHttpServer) -> type[BaseHTTPRequestHandler]:
                     break
             self.close_connection = True
 
-        def _legacy_post(self, msg: Any) -> None:
+        def _http_sse_post(self, msg: Any) -> None:
             def work() -> None:
                 gen = server.mcp.handle(msg)
                 to_send = None
@@ -194,7 +194,7 @@ def _make_handler(server: FakeHttpServer) -> type[BaseHTTPRequestHandler]:
                         return
                     to_send = None
                     if action == "send":
-                        server.legacy_out.put(arg)
+                        server.http_sse_out.put(arg)
                     elif action == "await":
                         to_send = server.responses.get(timeout=10)
 
@@ -227,8 +227,8 @@ def _make_handler(server: FakeHttpServer) -> type[BaseHTTPRequestHandler]:
                 return
             if self._unauthorized():
                 return
-            if s.get("legacy_sse"):
-                self._legacy_stream()
+            if s.get("http_sse"):
+                self._http_sse_stream()
                 return
             last = self.headers.get("Last-Event-ID")
             if last:
@@ -276,13 +276,13 @@ def _make_handler(server: FakeHttpServer) -> type[BaseHTTPRequestHandler]:
             method = msg.get("method") if isinstance(msg, dict) else None
             if self._unauthorized(msg):
                 return
-            if s.get("legacy_sse"):
+            if s.get("http_sse"):
                 if self.path.split("?", 1)[0] == "/mcp":
                     self._send(405)
                 else:
                     if isinstance(msg, dict) and "method" not in msg:
                         server.mcp.log(msg)
-                    self._legacy_post(msg)
+                    self._http_sse_post(msg)
                 return
 
             canned = s.get("status_for", {}).get(method)

@@ -137,7 +137,7 @@ def check_tools(log: DiagnosticLog, spec: SpecVersion, tools: list[dict[str, Any
         if "_meta" in t:
             _beyond(log, spec, Feature.META_FIELDS, f"tool {shown!r} _meta")
         if "execution" in t and not spec.has(Feature.TASKS_CORE):
-            if spec.era == "modern":
+            if spec.era == "stateless":
                 log.note(
                     "tool-execution-extension",
                     f"tool {shown!r} has execution; core tasks moved to the tasks extension in 2026-07-28",

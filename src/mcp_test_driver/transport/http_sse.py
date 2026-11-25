@@ -27,7 +27,7 @@ from .sse import SseEvent
 ENDPOINT_TIMEOUT = 10.0
 
 
-class LegacySseTransport(HttpTransport):
+class HttpSseTransport(HttpTransport):
     kind = "sse"
 
     def __init__(self, url: str, **kw: Any) -> None:

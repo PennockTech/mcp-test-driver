@@ -18,14 +18,14 @@ from enum import StrEnum
 from collections.abc import Mapping, Set as AbstractSet
 from typing import Any, Literal
 
-Era = Literal["handshake", "modern"]
+Era = Literal["handshake", "stateless"]
 
 
 class Feature(StrEnum):
     """Behaviours that are not visible as a method or capability name."""
 
     HANDSHAKE = "initialize handshake"
-    LEGACY_SSE = "HTTP+SSE transport"
+    HTTP_SSE = "HTTP+SSE transport"
     STREAMABLE_HTTP = "Streamable HTTP transport"
     BATCHING = "JSON-RPC batching"
     SESSIONS = "Mcp-Session-Id sessions"
@@ -65,7 +65,7 @@ class Feature(StrEnum):
 
 
 # Error codes defined by the spec beyond the JSON-RPC standard ones.
-RESOURCE_NOT_FOUND_LEGACY = -32002
+RESOURCE_NOT_FOUND_HANDSHAKE = -32002
 URL_ELICITATION_REQUIRED = -32042
 HEADER_MISMATCH = -32020
 MISSING_REQUIRED_CLIENT_CAPABILITY = -32021
@@ -190,8 +190,8 @@ V2024_11_05 = SpecVersion(
         {"experimental", "logging", "prompts", "resources", "tools"}
     ),
     content_types=frozenset({"text", "image", "resource"}),
-    features=frozenset({Feature.HANDSHAKE, Feature.LEGACY_SSE}),
-    error_codes=frozenset({RESOURCE_NOT_FOUND_LEGACY}),
+    features=frozenset({Feature.HANDSHAKE, Feature.HTTP_SSE}),
+    error_codes=frozenset({RESOURCE_NOT_FOUND_HANDSHAKE}),
 )
 
 V2025_03_26 = _evolve(
@@ -214,7 +214,7 @@ V2025_03_26 = _evolve(
         },
         "deprecated": {"HTTP+SSE transport"},
     },
-    remove={"features": {Feature.LEGACY_SSE}},
+    remove={"features": {Feature.HTTP_SSE}},
 )
 
 V2025_06_18 = _evolve(
@@ -271,7 +271,7 @@ V2025_11_25 = _evolve(
 V2026_07_28 = _evolve(
     V2025_11_25,
     "2026-07-28",
-    era="modern",
+    era="stateless",
     add={
         "client_requests": {"server/discover", "subscriptions/listen"},
         "server_notifications": {"notifications/subscriptions/acknowledged"},
@@ -325,7 +325,7 @@ V2026_07_28 = _evolve(
             Feature.TASKS_CORE,
             Feature.ELICITATION_COMPLETE,
         },
-        "error_codes": {RESOURCE_NOT_FOUND_LEGACY},
+        "error_codes": {RESOURCE_NOT_FOUND_HANDSHAKE},
     },
 )
 
@@ -336,10 +336,10 @@ KNOWN_VERSIONS: tuple[str, ...] = tuple(SPECS)
 HANDSHAKE_VERSIONS: tuple[str, ...] = tuple(
     v for v, s in SPECS.items() if s.era == "handshake"
 )
-MODERN_VERSIONS: tuple[str, ...] = tuple(v for v, s in SPECS.items() if s.era == "modern")
+STATELESS_VERSIONS: tuple[str, ...] = tuple(v for v, s in SPECS.items() if s.era == "stateless")
 LATEST = KNOWN_VERSIONS[-1]
 LATEST_HANDSHAKE = HANDSHAKE_VERSIONS[-1]
-LATEST_MODERN = MODERN_VERSIONS[-1]
+LATEST_STATELESS = STATELESS_VERSIONS[-1]
 
 # Version strings seen in the wild that map onto a released revision.
 # 2024-10-07 predates 2024-11-05 and is still listed by the TypeScript SDK.

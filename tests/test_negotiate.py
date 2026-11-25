@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from mcp_test_driver.negotiate import ConnectOptions, ModernRejected, connect
+from mcp_test_driver.negotiate import ConnectOptions, StatelessRejected, connect
 from mcp_test_driver.protocol import META_PROTOCOL_VERSION, McpSession
 from mcp_test_driver.repl import Repl
 from mcp_test_driver.transport import HttpTransport, StdioTransport
@@ -20,9 +20,9 @@ from mcp_test_driver.transport.params import analyse, param_headers
 from tests.conftest import SAMPLE_TOOLS, read_log
 from tests.test_interactive import Scripted
 
-MODERN = {"mode": "modern", "versions": ["2026-07-28"], "tools": SAMPLE_TOOLS}
+STATELESS = {"mode": "stateless", "versions": ["2026-07-28"], "tools": SAMPLE_TOOLS}
 DUAL = {"mode": "dual", "versions": ["2025-06-18", "2025-11-25", "2026-07-28"], "tools": SAMPLE_TOOLS}
-LEGACY = {"mode": "legacy", "versions": ["2025-11-25"], "tools": SAMPLE_TOOLS}
+HANDSHAKE = {"mode": "handshake", "versions": ["2025-11-25"], "tools": SAMPLE_TOOLS}
 
 Factory = Callable[..., McpSession]
 
@@ -48,10 +48,11 @@ def _codes(s: McpSession) -> set[str]:
     return {f.code for f in s.findings}
 
 
+
 class TestStdioEras:
-    def test_modern_server(self, stdio_session: Factory, log_path: Path) -> None:
-        s = stdio_session(MODERN)
-        assert s.state.era == "modern" and s.state.version == "2026-07-28"
+    def test_stateless_server(self, stdio_session: Factory, log_path: Path) -> None:
+        s = stdio_session(STATELESS)
+        assert s.state.era == "stateless" and s.state.version == "2026-07-28"
         assert s.state.supported == ["2026-07-28"]
         assert s.server_info["name"] == "fake-server"
         assert "server/discover: requested 2026-07-28" in s.state.how_chosen[0]
@@ -61,57 +62,57 @@ class TestStdioEras:
         assert not any(m.get("method") == "initialize" for m in read_log(log_path))
         assert not _codes(s) - {"no-server-info-meta"}
 
-    def test_dual_server_auto_and_legacy(self, stdio_session: Factory) -> None:
-        assert stdio_session(DUAL).state.era == "modern"
-        s = stdio_session(DUAL, era="legacy")
+    def test_dual_server_auto_and_handshake(self, stdio_session: Factory) -> None:
+        assert stdio_session(DUAL).state.era == "stateless"
+        s = stdio_session(DUAL, era="handshake")
         assert s.state.era == "handshake" and s.state.version == "2025-11-25"
 
-    def test_legacy_error_falls_back(self, stdio_session: Factory) -> None:
-        s = stdio_session(LEGACY)
+    def test_handshake_error_falls_back(self, stdio_session: Factory) -> None:
+        s = stdio_session(HANDSHAKE)
         assert s.state.era == "handshake" and s.state.version == "2025-11-25"
         assert any("falling back to initialize" in h for h in s.state.how_chosen)
 
-    def test_legacy_silent_falls_back_after_timeout(self, stdio_session: Factory) -> None:
-        s = stdio_session({**LEGACY, "on_unknown_pre_init": "silent"}, probe_timeout=0.3)
+    def test_handshake_silent_falls_back_after_timeout(self, stdio_session: Factory) -> None:
+        s = stdio_session({**HANDSHAKE, "on_unknown_pre_init": "silent"}, probe_timeout=0.3)
         assert s.state.era == "handshake"
         assert any("no reply" in h for h in s.state.how_chosen)
 
-    def test_legacy_exit_is_restarted(self, stdio_session: Factory) -> None:
-        s = stdio_session({**LEGACY, "on_unknown_pre_init": "exit"})
+    def test_handshake_exit_is_restarted(self, stdio_session: Factory) -> None:
+        s = stdio_session({**HANDSHAKE, "on_unknown_pre_init": "exit"})
         assert s.state.era == "handshake" and s.state.initialized
         assert "exit-on-discover" in _codes(s)
 
     def test_unsupported_version_retry(self, stdio_session: Factory) -> None:
-        s = stdio_session(MODERN, version="2099-01-01")
+        s = stdio_session(STATELESS, version="2099-01-01")
         assert s.state.version == "2026-07-28"
         assert any("2099-01-01 unsupported" in h for h in s.state.how_chosen)
 
-    def test_era_modern_rejects_legacy_server(self, fake_stdio) -> None:  # noqa: ANN001
-        t = StdioTransport(fake_stdio(LEGACY), timeout=10)
+    def test_era_stateless_rejects_handshake_server(self, fake_stdio) -> None:  # noqa: ANN001
+        t = StdioTransport(fake_stdio(HANDSHAKE), timeout=10)
         t.trace = False
-        with pytest.raises(ModernRejected):
-            connect(McpSession(t), ConnectOptions(era="modern", probe_timeout=1.0))
+        with pytest.raises(StatelessRejected):
+            connect(McpSession(t), ConnectOptions(era="stateless", probe_timeout=1.0))
         t.close()
 
     def test_removed_methods_noted_and_sent(self, stdio_session: Factory) -> None:
-        s = stdio_session(MODERN)
+        s = stdio_session(STATELESS)
         with pytest.raises(Exception, match="Method not found"):
             s.ping()
         assert "sent-request-outside-version" in _codes(s)
 
     def test_missing_result_type_and_cache_fields(self, stdio_session: Factory) -> None:
-        s = stdio_session({**MODERN, "omit_result_type": True})
+        s = stdio_session({**STATELESS, "omit_result_type": True})
         s.list_tools()
         assert "missing-result-type" in _codes(s)
         assert "missing-cache-fields" not in _codes(s)  # the fake still sends ttlMs/cacheScope
         s._observe_result("tools/list", {"jsonrpc": "2.0", "id": 1, "result": {"tools": [], "resultType": "complete"}})
         assert "missing-cache-fields" in _codes(s)
 
-    def test_legacy_resource_not_found_code_flagged(self, stdio_session: Factory) -> None:
+    def test_handshake_era_resource_not_found_code_flagged(self, stdio_session: Factory) -> None:
         s = stdio_session(DUAL)
-        s.state.era = "modern"
+        s.state.era = "stateless"
         s._observe_result("resources/read", {"jsonrpc": "2.0", "id": 9, "error": {"code": -32002, "message": "x"}})
-        assert "legacy-resource-not-found-code" in _codes(s)
+        assert "handshake-era-resource-not-found-code" in _codes(s)
 
 
 class TestMrtr:
@@ -119,7 +120,7 @@ class TestMrtr:
         "message": "login?", "requestedSchema": {"type": "object", "properties": {"name": {"type": "string"}}}}}}
 
     def _scenario(self) -> dict[str, Any]:
-        return {**MODERN, "tool_scripts": {"echo": [{"mrtr": self.ELICIT}, {"reply": {}}]}}
+        return {**STATELESS, "tool_scripts": {"echo": [{"mrtr": self.ELICIT}, {"reply": {}}]}}
 
     def test_input_gathered_and_retried(self, stdio_session: Factory, log_path: Path) -> None:
         s = stdio_session(self._scenario())
@@ -139,9 +140,9 @@ class TestMrtr:
 
 
 class TestListen:
-    def test_modern_stdio(self, fake_stdio, log_path: Path, capsys: pytest.CaptureFixture[str]) -> None:  # noqa: ANN001
+    def test_stateless_stdio(self, fake_stdio, log_path: Path, capsys: pytest.CaptureFixture[str]) -> None:  # noqa: ANN001
         event = {"jsonrpc": "2.0", "method": "notifications/tools/list_changed"}
-        t = StdioTransport(fake_stdio({**MODERN, "log_path": str(log_path), "listen_events": [event]}), timeout=10)
+        t = StdioTransport(fake_stdio({**STATELESS, "log_path": str(log_path), "listen_events": [event]}), timeout=10)
         t.trace = False
         s = McpSession(t)
         connect(s, ConnectOptions())
@@ -157,9 +158,9 @@ class TestListen:
         assert "subscription-not-acknowledged" not in _codes(s)
         t.close()
 
-    def test_modern_http(self, fake_http, capsys: pytest.CaptureFixture[str]) -> None:  # noqa: ANN001
+    def test_stateless_http(self, fake_http, capsys: pytest.CaptureFixture[str]) -> None:  # noqa: ANN001
         event = {"jsonrpc": "2.0", "method": "notifications/prompts/list_changed"}
-        srv = fake_http({**MODERN, "http_mode": "sse", "listen_events": [event]})
+        srv = fake_http({**STATELESS, "http_mode": "sse", "listen_events": [event]})
         t = HttpTransport(srv.url, timeout=10)
         t.trace = False
         s = McpSession(t)
@@ -172,11 +173,11 @@ class TestListen:
 
     def test_get_stream_opened_after_initialize(self, fake_http) -> None:  # noqa: ANN001
         note = {"jsonrpc": "2.0", "method": "notifications/tools/list_changed"}
-        srv = fake_http({**LEGACY, "session_id": "s", "get_events": [note]})
+        srv = fake_http({**HANDSHAKE, "session_id": "s", "get_events": [note]})
         t = HttpTransport(srv.url, timeout=10)
         t.trace = False
         s = McpSession(t)
-        connect(s, ConnectOptions(era="legacy"))
+        connect(s, ConnectOptions(era="handshake"))
         assert t.listening and "GET listening stream: open" in s.state.how_chosen
         got: list[dict] = []
         s.notification_listeners.append(got.append)
@@ -195,11 +196,11 @@ class TestListen:
 
     def test_listen_opens_and_closes_get_stream(self, fake_http) -> None:  # noqa: ANN001
         note = {"jsonrpc": "2.0", "method": "notifications/tools/list_changed"}
-        srv = fake_http({**LEGACY, "session_id": "s", "get_events": [note]})
+        srv = fake_http({**HANDSHAKE, "session_id": "s", "get_events": [note]})
         t = HttpTransport(srv.url, timeout=10)
         t.trace = False
         s = McpSession(t)
-        connect(s, ConnectOptions(era="legacy", listen=False))
+        connect(s, ConnectOptions(era="handshake", listen=False))
         assert not t.listening
         r = Repl(s)
         r.handle_line("/listen 0.5")
@@ -208,17 +209,17 @@ class TestListen:
         t.close()
 
     def test_handshake_http_405(self, fake_http, capsys: pytest.CaptureFixture[str]) -> None:  # noqa: ANN001
-        srv = fake_http({**LEGACY})
+        srv = fake_http({**HANDSHAKE})
         t = HttpTransport(srv.url, timeout=10)
         t.trace = False
         s = McpSession(t)
-        connect(s, ConnectOptions(era="legacy"))
+        connect(s, ConnectOptions(era="handshake"))
         Repl(s).handle_line("/listen 0.2")
         assert "405" in capsys.readouterr().out
         t.close()
 
     def test_declined_types_reported(self, fake_stdio, capsys: pytest.CaptureFixture[str]) -> None:  # noqa: ANN001
-        t = StdioTransport(fake_stdio({**MODERN, "listen_support": ["toolsListChanged"]}), timeout=10)
+        t = StdioTransport(fake_stdio({**STATELESS, "listen_support": ["toolsListChanged"]}), timeout=10)
         t.trace = False
         s = McpSession(t)
         connect(s, ConnectOptions())
@@ -227,16 +228,16 @@ class TestListen:
         t.close()
 
 
-class TestHttpModern:
+class TestHttpStateless:
     def test_headers_and_no_session(self, fake_http) -> None:  # noqa: ANN001
         tools = [{"name": "sql", "inputSchema": {"type": "object", "properties": {
             "region": {"type": "string", "x-mcp-header": "Region"}, "q": {"type": "string"}}}}]
-        srv = fake_http({**MODERN, "tools": tools, "session_id": None})
+        srv = fake_http({**STATELESS, "tools": tools, "session_id": None})
         t = HttpTransport(srv.url, timeout=10)
         t.trace = False
         s = McpSession(t)
         connect(s, ConnectOptions())
-        assert s.state.era == "modern"
+        assert s.state.era == "stateless"
         r = Repl(s)
         r.handle_line("sql region=us-west1 q=select")
         h = srv.headers_for("tools/call")[0]
@@ -248,8 +249,8 @@ class TestHttpModern:
         assert d["Mcp-Method"] == "server/discover"
         t.close()
 
-    def test_legacy_http_falls_back(self, fake_http) -> None:  # noqa: ANN001
-        srv = fake_http({**LEGACY, "session_id": "s1"})
+    def test_handshake_http_falls_back(self, fake_http) -> None:  # noqa: ANN001
+        srv = fake_http({**HANDSHAKE, "session_id": "s1"})
         t = HttpTransport(srv.url, timeout=10)
         t.trace = False
         s = McpSession(t)
@@ -258,15 +259,15 @@ class TestHttpModern:
         assert "Mcp-Method" not in srv.headers_for("initialize")[0]
         t.close()
 
-    def test_modern_error_in_400_body_counts_as_modern(self, fake_http) -> None:  # noqa: ANN001
+    def test_stateless_error_in_400_body_counts_as_stateless(self, fake_http) -> None:  # noqa: ANN001
         body = {"jsonrpc": "2.0", "id": 1, "error": {"code": -32022, "message": "no",
                                                        "data": {"supported": ["2026-07-28"], "requested": "2099-01-01"}}}
-        srv = fake_http({**MODERN, "status_for": {"server/discover": [400, body, {}]}})
+        srv = fake_http({**STATELESS, "status_for": {"server/discover": [400, body, {}]}})
         t = HttpTransport(srv.url, timeout=10)
         t.trace = False
         s = McpSession(t)
-        with pytest.raises(ModernRejected):
-            connect(s, ConnectOptions(era="modern", version="2099-01-01"))
+        with pytest.raises(StatelessRejected):
+            connect(s, ConnectOptions(era="stateless", version="2099-01-01"))
         assert any("2099-01-01 unsupported" in h for h in s.state.how_chosen)
         t.close()
 

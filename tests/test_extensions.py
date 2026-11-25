@@ -74,7 +74,7 @@ class TestCoreTasks:
 
 
 class TestExtensionTasks:
-    SCEN = {"mode": "modern", "versions": ["2026-07-28"],
+    SCEN = {"mode": "stateless", "versions": ["2026-07-28"],
             "tool_scripts": {"echo": [{"task": {"polls": 1, "input": ELICIT}}]}}
 
     def test_task_with_input_required(self, make: Factory, log_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -142,7 +142,7 @@ class TestSkills:
 
 
 def test_extension_command_and_report(make: Factory, capsys: pytest.CaptureFixture[str]) -> None:
-    r = make({"capabilities": {"tools": {}, "extensions": {"io.modelcontextprotocol/ui": {"v": 1}}}}, era="legacy")
+    r = make({"capabilities": {"tools": {}, "extensions": {"io.modelcontextprotocol/ui": {"v": 1}}}}, era="handshake")
     r.handle_line("/extension add com.example/thing {x: 1}")
     assert r.session.client_capabilities()["extensions"] == {"com.example/thing": {"x": 1}}
     out = capsys.readouterr().out
@@ -161,7 +161,7 @@ def test_cli_extension_flag(fake_stdio) -> None:  # noqa: ANN001
 
     log = Path(fake_stdio({})[-1]).with_name("ext.jsonl")
     cmd = fake_stdio({"tools": SAMPLE_TOOLS, "log_path": str(log)})
-    r = subprocess.run([sys.executable, "-m", "mcp_test_driver", "-q", "--no-trace", "--era", "legacy",
+    r = subprocess.run([sys.executable, "-m", "mcp_test_driver", "-q", "--no-trace", "--era", "handshake",
                         "--extension", 'com.example/x={"a": 1}', *cmd], input="", capture_output=True, text=True, timeout=30)
     assert r.returncode == 0, r.stderr
     init = json.loads(log.read_text().splitlines()[0])

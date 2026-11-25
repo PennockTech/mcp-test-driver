@@ -26,7 +26,8 @@ By default the driver acts as the spec's dual-era client.  It probes with
 otherwise falls back to `initialize`.  The start-up report (`/info`)
 shows what was tried and why.
 
-- `--era legacy` skips the probe; `--era modern` refuses legacy servers.
+- `--era handshake` skips the probe; `--era stateless` refuses
+  handshake-era servers.
 - `--protocol-version REV` offers or requests a specific revision.
 - The revision sets defaults only.  `/ping` and other methods a revision
   removed are still sent if you ask, with a note.  `/loglevel` sets the

@@ -15,7 +15,7 @@ mid-call server request is sent and its answer awaited:
                                client cancels it (HTTP only; no-op on stdio)
 
 Scenario keys (all optional):
-    mode            "legacy" | "modern" | "dual"         (default "legacy")
+    mode            "handshake" | "stateless" | "dual"  (default "handshake")
     versions        revisions supported, oldest first   (default ["2025-11-25"])
     counter_offer   answer initialize with this version regardless
     server_info, capabilities, instructions
@@ -29,11 +29,11 @@ Scenario keys (all optional):
                       if the call had params.task, else the 2026 extension style
     resource_contents  {uri: [contents]}
     completions     list of values for completion/complete
-    on_unknown_pre_init  "error" | "silent" | "exit"   (legacy servers)
+    on_unknown_pre_init  "error" | "silent" | "exit"   (handshake-era servers)
     after_initialized    [notification, ...]  sent once initialized
     batch_responses  answer with single-element batch arrays
     log_path        append every received message as a JSON line
-    omit_result_type  modern replies without resultType/serverInfo (to provoke findings)
+    omit_result_type  stateless replies without resultType/serverInfo (to provoke findings)
     skills          entries for skills/list (skills/get finds by uri)
     listen_support  filter keys the server honours (default: all four)
     listen_events   notifications sent on a subscriptions/listen stream
@@ -49,7 +49,7 @@ Action = tuple[str, Any]
 Handler = Generator[Action, Any, None]
 
 META = "io.modelcontextprotocol/"
-_REMOVED_IN_MODERN = {"ping", "logging/setLevel", "resources/subscribe", "resources/unsubscribe"}
+_REMOVED_IN_STATELESS = {"ping", "logging/setLevel", "resources/subscribe", "resources/unsubscribe"}
 
 
 def result(req_id: Any, value: dict[str, Any]) -> dict[str, Any]:
@@ -66,7 +66,7 @@ def error(req_id: Any, code: int, message: str, data: Any = None) -> dict[str, A
 class FakeMcp:
     def __init__(self, scenario: dict[str, Any]) -> None:
         self.s = scenario
-        self.mode = scenario.get("mode", "legacy")
+        self.mode = scenario.get("mode", "handshake")
         self.versions = scenario.get("versions", ["2025-11-25"])
         self.initialized = False
         self.negotiated: str | None = None
@@ -87,7 +87,7 @@ class FakeMcp:
         return self._next_id
 
     def _wrap(self, value: dict[str, Any]) -> dict[str, Any]:
-        if self.mode != "legacy" and self.negotiated is None and not self.s.get("omit_result_type"):
+        if self.mode != "handshake" and self.negotiated is None and not self.s.get("omit_result_type"):
             value.setdefault("resultType", "complete")
             value.setdefault("_meta", {})[META + "serverInfo"] = self.server_info()
         return value
@@ -139,7 +139,7 @@ class FakeMcp:
             return
         req_id = msg["id"]
         meta = params.get("_meta") or {}
-        modern_req = META + "protocolVersion" in meta
+        stateless_req = META + "protocolVersion" in meta
 
         if method == "initialize":
             yield from self._initialize(req_id, params)
@@ -147,28 +147,28 @@ class FakeMcp:
         if method == "server/discover":
             yield from self._discover(req_id, meta)
             return
-        if self.mode == "legacy" and not self.negotiated:
+        if self.mode == "handshake" and not self.negotiated:
             yield from self._pre_init(req_id)
             return
-        if self.mode == "modern" or (self.mode == "dual" and modern_req and not self.negotiated):
+        if self.mode == "stateless" or (self.mode == "dual" and stateless_req and not self.negotiated):
             version = meta.get(META + "protocolVersion")
             if version not in self.versions:
                 yield ("send", error(req_id, -32022, "Unsupported protocol version",
                                      {"supported": self.versions, "requested": version}))
                 return
-        if (modern_req or self.mode == "modern") and method in _REMOVED_IN_MODERN:
+        if (stateless_req or self.mode == "stateless") and method in _REMOVED_IN_STATELESS:
             yield ("send", error(req_id, -32601, f"Method not found: {method}"))
             return
         yield from self._method(req_id, method, params)
 
     def _initialize(self, req_id: Any, params: dict[str, Any]) -> Handler:
-        if self.mode == "modern":
+        if self.mode == "stateless":
             yield ("send", error(req_id, -32601,
                                  f"initialize is not supported; this server speaks {', '.join(self.versions)}"))
             return
-        legacy = [v for v in self.versions if v < "2026"]
+        handshake = [v for v in self.versions if v < "2026"]
         offered = params.get("protocolVersion")
-        version = self.s.get("counter_offer") or (offered if offered in legacy else legacy[-1])
+        version = self.s.get("counter_offer") or (offered if offered in handshake else handshake[-1])
         self.negotiated = version
         value: dict[str, Any] = {
             "protocolVersion": version,
@@ -180,17 +180,17 @@ class FakeMcp:
         yield ("send", result(req_id, value))
 
     def _discover(self, req_id: Any, meta: dict[str, Any]) -> Handler:
-        if self.mode == "legacy":
+        if self.mode == "handshake":
             yield from self._pre_init(req_id)
             return
         version = meta.get(META + "protocolVersion")
-        modern = [v for v in self.versions if v >= "2026"]
-        if version not in modern:
+        stateless = [v for v in self.versions if v >= "2026"]
+        if version not in stateless:
             yield ("send", error(req_id, -32022, "Unsupported protocol version",
-                                 {"supported": modern, "requested": version}))
+                                 {"supported": stateless, "requested": version}))
             return
         value: dict[str, Any] = {
-            "supportedVersions": modern,
+            "supportedVersions": stateless,
             "capabilities": self.s.get("capabilities", {"tools": {}}),
             "ttlMs": 60000,
             "cacheScope": "public",
@@ -218,7 +218,7 @@ class FakeMcp:
         if method in lists:
             key, out_key = lists[method]
             value = self._page(self.s.get(key, []), params, out_key)
-            if self.mode != "legacy" and self.negotiated is None:
+            if self.mode != "handshake" and self.negotiated is None:
                 value.update({"ttlMs": 1000, "cacheScope": "private"})
             yield ("send", self.reply(req_id, value))
         elif method == "tools/call":
@@ -229,7 +229,7 @@ class FakeMcp:
             uri = params.get("uri")
             contents = self.s.get("resource_contents", {}).get(uri)
             if contents is None:
-                code = -32602 if self.mode == "modern" else -32002
+                code = -32602 if self.mode == "stateless" else -32002
                 yield ("send", error(req_id, code, "Resource not found", {"uri": uri}))
             else:
                 yield ("send", self.reply(req_id, {"contents": contents}))

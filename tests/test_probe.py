@@ -20,8 +20,8 @@ from mcp_test_driver.repl import Repl, SessionCache
 from mcp_test_driver.transport import HttpTransport, StdioTransport
 from tests.conftest import SAMPLE_TOOLS
 
-LEGACY = {"versions": ["2025-11-25"], "tools": SAMPLE_TOOLS, "capabilities": {"tools": {}}}
-MODERN = {"mode": "modern", "versions": ["2026-07-28"], "tools": SAMPLE_TOOLS}
+HANDSHAKE = {"versions": ["2025-11-25"], "tools": SAMPLE_TOOLS, "capabilities": {"tools": {}}}
+STATELESS = {"mode": "stateless", "versions": ["2026-07-28"], "tools": SAMPLE_TOOLS}
 
 
 def _run(args: list[str], **kw: Any) -> subprocess.CompletedProcess[str]:
@@ -51,8 +51,8 @@ def stdio_ctx(fake_stdio):  # noqa: ANN001, ANN201
 
 
 class TestProbes:
-    def test_legacy_server(self, stdio_ctx) -> None:  # noqa: ANN001
-        ctx = stdio_ctx(LEGACY)
+    def test_handshake_server(self, stdio_ctx) -> None:  # noqa: ANN001
+        ctx = stdio_ctx(HANDSHAKE)
         r = _by_id(probe.run(probe.PROBES, ctx))
         assert r["method:server/discover"].outcome == Outcome.UNCLEAR  # "not initialized"
         assert r["method:ping"].outcome == Outcome.SUPPORTED and r["method:ping"].claimed
@@ -63,18 +63,18 @@ class TestProbes:
         assert "probe-feature:batch" in codes  # batches after 2025-03-26
         assert not any(c.startswith("probe-method:tasks") for c in codes)
 
-    def test_modern_server(self, stdio_ctx) -> None:  # noqa: ANN001
-        r = _by_id(probe.run(probe.PROBES, stdio_ctx(MODERN)))
+    def test_stateless_server(self, stdio_ctx) -> None:  # noqa: ANN001
+        r = _by_id(probe.run(probe.PROBES, stdio_ctx(STATELESS)))
         assert r["method:server/discover"].outcome == Outcome.SUPPORTED
         assert r["method:ping"].outcome == Outcome.UNSUPPORTED and not r["method:ping"].claimed
 
     def test_matrix_rows(self, stdio_ctx) -> None:  # noqa: ANN001
-        rows = {row[0]: row for row in probe.matrix_rows(probe.run(probe.PROBES, stdio_ctx(LEGACY)))}
+        rows = {row[0]: row for row in probe.matrix_rows(probe.run(probe.PROBES, stdio_ctx(HANDSHAKE)))}
         assert rows["ping"][2:] == ("yes", "yes")
         assert rows["JSON-RPC batch"][1] == "2025-03-26"
 
     def test_versions_sweep(self, stdio_ctx) -> None:  # noqa: ANN001
-        ctx = stdio_ctx({**LEGACY, "versions": ["2025-03-26", "2025-11-25"]}, era="legacy")
+        ctx = stdio_ctx({**HANDSHAKE, "versions": ["2025-03-26", "2025-11-25"]}, era="handshake")
         rows = dict(probe.probe_versions(ctx.session))
         assert rows["2025-03-26"].startswith("2025-03-26 via initialize")
         assert "counter-offer" in rows["2024-11-05"]
@@ -84,7 +84,7 @@ class TestProbes:
 
 class TestChecks:
     def test_stdio_checks(self, stdio_ctx) -> None:  # noqa: ANN001
-        r = _by_id(probe.run(probe.CHECKS, stdio_ctx({**LEGACY, "capabilities": {"tools": {}, "completions": {}, "prompts": {}},
+        r = _by_id(probe.run(probe.CHECKS, stdio_ctx({**HANDSHAKE, "capabilities": {"tools": {}, "completions": {}, "prompts": {}},
                                                      "prompts": [{"name": "p", "arguments": [{"name": "a"}]}],
                                                      "completions": ["x"]})))
         assert r["tools-list"].outcome == Outcome.PASS
@@ -95,13 +95,13 @@ class TestChecks:
         assert r["completion-complete"].outcome == Outcome.PASS
         assert r["dns-rebinding-protection"].outcome == Outcome.SKIP
 
-    def test_modern_resource_not_found(self, stdio_ctx) -> None:  # noqa: ANN001
-        r = _by_id(probe.run(probe.CHECKS, stdio_ctx(MODERN)))
+    def test_stateless_resource_not_found(self, stdio_ctx) -> None:  # noqa: ANN001
+        r = _by_id(probe.run(probe.CHECKS, stdio_ctx(STATELESS)))
         assert r["sep-2164-resource-not-found"].outcome == Outcome.PASS  # -32602 in 2026
         assert r["caching"].outcome == Outcome.PASS
 
     def test_http_header_checks_fail_on_lenient_server(self, fake_http) -> None:  # noqa: ANN001
-        srv = fake_http(MODERN)  # the fake does not validate headers or Origin
+        srv = fake_http(STATELESS)  # the fake does not validate headers or Origin
         t = HttpTransport(srv.url, timeout=10)
         t.trace = False
         s = McpSession(t)
@@ -115,14 +115,14 @@ class TestChecks:
 
 class TestCli:
     def test_check_exit_status_and_json(self, fake_stdio) -> None:  # noqa: ANN001
-        r = _run(["--check", "--json", *fake_stdio(LEGACY)])
+        r = _run(["--check", "--json", *fake_stdio(HANDSHAKE)])
         assert r.returncode == 0, r.stderr
         doc = json.loads(r.stdout)
         assert doc["result"] == "pass" and doc["protocol"]["version"] == "2025-11-25"
         assert {c["id"] for c in doc["checks"]} >= {"tools-list", "check:unknown-method"}
 
     def test_check_fails_on_bad_server(self, fake_stdio) -> None:  # noqa: ANN001
-        bad = {**LEGACY, "tools": [{"name": "a", "inputSchema": {"type": "object"}}, {"name": "a"}]}
+        bad = {**HANDSHAKE, "tools": [{"name": "a", "inputSchema": {"type": "object"}}, {"name": "a"}]}
         r = _run(["--check", "-q", "--no-trace", *fake_stdio(bad)])
         assert r.returncode == 1
         assert "Result: FAIL" in r.stdout
@@ -133,34 +133,34 @@ class TestCli:
         assert _run(["/nonexistent/server"]).returncode == 1  # interactive mode keeps 1
 
     def test_probe_versions_cli(self, fake_stdio) -> None:  # noqa: ANN001
-        r = _run(["--probe-versions", "--json", *fake_stdio({**LEGACY, "versions": ["2025-06-18"]})])
+        r = _run(["--probe-versions", "--json", *fake_stdio({**HANDSHAKE, "versions": ["2025-06-18"]})])
         doc = json.loads(r.stdout)
         assert {v["offered"] for v in doc["versions"]} == {"2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25", "2026-07-28"}
 
     def test_exec(self, fake_stdio) -> None:  # noqa: ANN001
-        r = _run(["-q", "--no-trace", "-c", "echo text=one", "-c", "/ping", *fake_stdio(LEGACY)])
+        r = _run(["-q", "--no-trace", "-c", "echo text=one", "-c", "/ping", *fake_stdio(HANDSHAKE)])
         assert r.returncode == 0 and '"text": "one"' in r.stdout
-        r = _run(["-q", "--no-trace", "-c", "/send no/such", *fake_stdio(LEGACY)])
+        r = _run(["-q", "--no-trace", "-c", "/send no/such", *fake_stdio(HANDSHAKE)])
         assert r.returncode == 1
 
     def test_conformance_client_mode(self, fake_stdio) -> None:  # noqa: ANN001
         env = {**os.environ, "MCP_CONFORMANCE_SCENARIO": "tools_call", "MCP_CONFORMANCE_PROTOCOL_VERSION": "2025-11-25"}
-        r = _run(["--conformance-client", *fake_stdio({**LEGACY, "log_path": "/dev/null"})], env=env)
+        r = _run(["--conformance-client", *fake_stdio({**HANDSHAKE, "log_path": "/dev/null"})], env=env)
         assert r.returncode == 0, r.stderr
         assert '"a": 2' in r.stdout
 
     def test_conformance_tool_calls_from_context(self, fake_stdio) -> None:  # noqa: ANN001
         ctx = {"toolCalls": [{"name": "echo", "arguments": {"text": "ctx"}}]}
         env = {**os.environ, "MCP_CONFORMANCE_SCENARIO": "x", "MCP_CONFORMANCE_CONTEXT": json.dumps(ctx)}
-        r = _run(["--conformance-client", *fake_stdio(LEGACY)], env=env)
+        r = _run(["--conformance-client", *fake_stdio(HANDSHAKE)], env=env)
         assert '"text": "ctx"' in r.stdout
 
 
 def test_repl_commands(fake_stdio, capsys: pytest.CaptureFixture[str]) -> None:  # noqa: ANN001
-    t = StdioTransport(fake_stdio(LEGACY), timeout=10)
+    t = StdioTransport(fake_stdio(HANDSHAKE), timeout=10)
     t.trace = False
     s = McpSession(t)
-    connect(s, ConnectOptions(era="legacy"))
+    connect(s, ConnectOptions(era="handshake"))
     r = Repl(s)
     r.handle_line("/probe")
     assert "JSON-RPC batch" in capsys.readouterr().out

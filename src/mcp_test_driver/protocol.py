@@ -88,7 +88,7 @@ class ServerState:
     """What we know about the server and how we are talking to it."""
 
     era: Era = "handshake"
-    # The revision in effect (negotiated, or chosen for modern requests).
+    # The revision in effect (negotiated, or chosen for stateless requests).
     version: str | None = None
     # What we offered in initialize / per-request _meta.
     offered: str | None = None
@@ -136,7 +136,7 @@ class McpSession:
         self.notification_listeners: list[NotificationListener] = [print_notification]
         # Sticky user overrides from /meta.
         self.meta_overrides: JsonObject = {}
-        # Modern era: per-request log level (replaces logging/setLevel).
+        # Stateless era: per-request log level (replaces logging/setLevel).
         self.log_level: str | None = None
         self.progress = False
         self.otel = False
@@ -186,7 +186,7 @@ class McpSession:
 
     def _request_meta(self, method: str) -> JsonObject:
         meta: JsonObject = {}
-        if self.state.era == "modern" and method != "initialize":
+        if self.state.era == "stateless" and method != "initialize":
             meta[META_PROTOCOL_VERSION] = self.state.version or self.offer_version
             meta[META_CLIENT_CAPABILITIES] = self.client_capabilities()
             meta[META_CLIENT_INFO] = self.client_info()
@@ -274,7 +274,7 @@ class McpSession:
                 f"{method} returned InputRequiredResult; only {', '.join(sorted(MRTR_METHODS))} may",
                 "basic/patterns/mrtr#supported-requests",
             )
-        if self.state.era != "modern":
+        if self.state.era != "stateless":
             self.findings.beyond("mrtr-in-handshake-era", f"{method} used multi round-trip requests (2026-07-28)")
         requests = result.get("inputRequests")
         state = result.get("requestState")
@@ -397,13 +397,13 @@ class McpSession:
 
     def _observe_result(self, method: str, resp: JsonObject) -> None:
         """Conformance notes on a response, given the request that caused it."""
-        modern = self.state.era == "modern"
+        stateless = self.state.era == "stateless"
         err = resp.get("error")
         if isinstance(err, dict):
             code = err.get("code")
-            if modern and code == versions.RESOURCE_NOT_FOUND_LEGACY:
+            if stateless and code == versions.RESOURCE_NOT_FOUND_HANDSHAKE:
                 self.findings.violation(
-                    "legacy-resource-not-found-code",
+                    "handshake-era-resource-not-found-code",
                     "server used -32002 for a missing resource; 2026-07-28 uses -32602",
                     "server/resources#error-handling",
                     level=Level.WARNING,
@@ -415,9 +415,9 @@ class McpSession:
         meta = result.get("_meta")
         if isinstance(meta, dict) and isinstance(meta.get(META_SERVER_INFO), dict) and not self.state.server_info:
             self.state.server_info = meta[META_SERVER_INFO]
-        if "resultType" in result and not modern:
+        if "resultType" in result and not stateless:
             self.findings.beyond("result-type-in-handshake-era", f"{method} result carries resultType (2026-07-28)")
-        if not modern:
+        if not stateless:
             return
         if "resultType" not in result:
             self.findings.violation(
@@ -466,9 +466,9 @@ class McpSession:
         req_id = msg.get("id")
         self.server_requests_seen.append(method)
         eprint(cyan(f"  <<< server request: {sanitize(method)} (id={sanitize(str(req_id))})"))
-        if self.state.era == "modern":
+        if self.state.era == "stateless":
             self.findings.violation(
-                "server-request-in-modern-era",
+                "server-request-in-stateless-era",
                 f"server sent a JSON-RPC request ({sanitize(method)}); "
                 f"{self.spec.name} requires multi round-trip results instead",
                 "basic/patterns/mrtr",
@@ -632,19 +632,19 @@ class McpSession:
                 "basic/lifecycle#version-negotiation",
                 level=Level.WARNING,
             )
-        if versions.era_of(canonical) == "modern" and versions.is_known(canonical):
+        if versions.era_of(canonical) == "stateless" and versions.is_known(canonical):
             self.findings.violation(
-                "initialize-negotiated-modern",
+                "initialize-negotiated-stateless",
                 f"initialize negotiated {canonical}, a revision without the initialize handshake",
                 "basic/versioning",
                 level=Level.WARNING,
             )
         self.apply_wire()
 
-    def adopt_modern(self, version: str, result: JsonObject, how: str) -> None:
+    def adopt_stateless(self, version: str, result: JsonObject, how: str) -> None:
         """Record a server/discover result: the stateless era is in effect."""
         supported = result.get("supportedVersions")
-        self.state.era = "modern"
+        self.state.era = "stateless"
         self.state.supported = [v for v in supported if isinstance(v, str)] if isinstance(supported, list) else []
         if not self.state.supported:
             self.findings.violation("discover-no-versions", "server/discover result lacks supportedVersions",
@@ -667,7 +667,7 @@ class McpSession:
         self.apply_wire()
 
     def reset_to_handshake(self) -> None:
-        """Forget a failed modern probe before falling back to initialize."""
+        """Forget a failed stateless probe before falling back to initialize."""
         how = self.state.how_chosen
         self.state = ServerState(offered=self.offer_version, how_chosen=how)
         self.apply_wire()

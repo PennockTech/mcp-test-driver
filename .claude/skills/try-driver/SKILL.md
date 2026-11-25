@@ -29,7 +29,8 @@ uv run mcp-test-driver --no-trace -c '/list' -c 'echo text=hi' -c '/findings' \
 
 Options go before the target.  Useful ones:
 
-- `--era legacy` / `--era modern`: force one side of a `dual` server.
+- `--era handshake` / `--era stateless`: force one side of a `dual`
+  server.
 - `--trace` (the default) shows the JSON-RPC traffic; `--no-trace` hides it.
 - `-q`: skip the connection report.
 - `--check --json` / `--probe --json`: one JSON document on stdout; the
@@ -50,7 +51,7 @@ import subprocess, sys
 from tests.fakes.http_server import FakeHttpServer
 
 scenario = {
-    "mode": "modern", "versions": ["2026-07-28"], "http_mode": "sse",
+    "mode": "stateless", "versions": ["2026-07-28"], "http_mode": "sse",
     "tools": [{"name": "echo", "inputSchema": {"type": "object"}}],
 }
 srv = FakeHttpServer(scenario).start()

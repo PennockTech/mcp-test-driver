@@ -4,8 +4,8 @@ Status: Accepted (2026-11-12)
 
 ## Context
 
-Servers hand the client URLs and documents: HTTP redirects, the legacy
-SSE `endpoint`, OAuth metadata locations, server cards, URL-mode
+Servers hand the client URLs and documents: HTTP redirects, the
+HTTP+SSE `endpoint`, OAuth metadata locations, server cards, URL-mode
 elicitation, MCP Apps HTML.  Each is a way to make the client reach an
 internal host (SSRF), send credentials elsewhere, or run content on the
 user's machine.
@@ -14,7 +14,7 @@ user's machine.
 
 - **Redirects** on the MCP endpoint and on fetches are never followed; a
   3xx is an error.
-- **Legacy SSE `endpoint`** must be the same origin as the SSE URL, or
+- **The HTTP+SSE `endpoint`** must be the same origin as the SSE URL, or
   the connection is refused: our POSTs and `Authorization` would follow
   it.
 - **Fetched documents** go through `fetch.JsonFetcher`: GET only, no

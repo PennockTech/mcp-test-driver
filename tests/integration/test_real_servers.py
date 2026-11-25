@@ -46,16 +46,16 @@ def everything_server() -> list[str]:
     return [npx, "-y", EVERYTHING]
 
 
-def test_python_sdk_is_modern_and_clean() -> None:
+def test_python_sdk_is_stateless_and_clean() -> None:
     r = driver("-c", "add a=2 b=40", "-c", "/check", *py_sdk_server())
     assert r.returncode == 0, r.stderr
-    assert "2026-07-28 via stateless (modern)" in r.stdout
+    assert "2026-07-28 via stateless requests" in r.stdout
     assert "42" in r.stdout
     assert "[error/" not in r.stdout
 
 
-def test_python_sdk_legacy_era() -> None:
-    r = driver("--era", "legacy", "-c", "echo text=hi", *py_sdk_server())
+def test_python_sdk_handshake_era() -> None:
+    r = driver("--era", "handshake", "-c", "echo text=hi", *py_sdk_server())
     assert r.returncode == 0, r.stderr
     assert "2025-11-25 via initialize handshake" in r.stdout
 

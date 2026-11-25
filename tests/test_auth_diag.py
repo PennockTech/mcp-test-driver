@@ -166,7 +166,7 @@ def test_server_card_compared(fake_http, capsys: pytest.CaptureFixture[str]) -> 
     t = HttpTransport(srv.url, timeout=10)
     t.trace = False
     s = McpSession(t)
-    connect(s, ConnectOptions(era="legacy"))
+    connect(s, ConnectOptions(era="handshake"))
     Repl(s).handle_line("/server-card")
     out = capsys.readouterr().out
     assert "other-name" in out and "AI catalog" in out

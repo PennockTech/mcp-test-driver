@@ -19,7 +19,7 @@ from .sanitize import safe_json, sanitize, sanitize_any
 
 _ERROR_NAMES = {
     **versions.STANDARD_ERRORS,
-    versions.RESOURCE_NOT_FOUND_LEGACY: "Resource not found (pre-2026)",
+    versions.RESOURCE_NOT_FOUND_HANDSHAKE: "Resource not found (pre-2026)",
     versions.URL_ELICITATION_REQUIRED: "URL elicitation required",
     versions.HEADER_MISMATCH: "Header mismatch",
     versions.MISSING_REQUIRED_CLIENT_CAPABILITY: "Missing required client capability",

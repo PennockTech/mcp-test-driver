@@ -63,11 +63,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     g = p.add_argument_group("protocol")
     g.add_argument("--protocol-version", metavar="REV",
-                   help=f"revision to offer or request (default: {versions.LATEST_MODERN} for "
+                   help=f"revision to offer or request (default: {versions.LATEST_STATELESS} for "
                    f"stateless requests, {versions.LATEST_HANDSHAKE} for initialize)")
-    g.add_argument("--era", choices=("auto", "legacy", "modern"), default="auto",
+    g.add_argument("--era", choices=("auto", "handshake", "stateless"), default="auto",
                    help="auto (default): probe with server/discover, falling back to initialize; "
-                   "legacy: initialize handshake only; modern: stateless (2026-07-28+) only")
+                   "handshake: initialize only; stateless: stateless requests (2026-07-28+) only")
     g.add_argument("--probe-timeout", type=float, default=5.0, metavar="SECS",
                    help="how long --era auto waits for a server/discover reply (default 5)")
     g.add_argument("--timeout", type=float, default=None, metavar="SECS",
@@ -205,7 +205,7 @@ def main(argv: list[str] | None = None) -> None:
 
 def make_transport(args: argparse.Namespace) -> Transport:
     from .transport import DEFAULT_TIMEOUT, HttpTransport, StdioTransport
-    from .transport.legacy_sse import LegacySseTransport
+    from .transport.http_sse import HttpSseTransport
 
     target: list[str] = args.target
     timeout = args.timeout or DEFAULT_TIMEOUT
@@ -222,7 +222,7 @@ def make_transport(args: argparse.Namespace) -> Transport:
             if not token:
                 raise ValueError(f"environment variable {args.bearer_env} is empty or unset")
             headers["Authorization"] = f"Bearer {token}"
-        cls = LegacySseTransport if kind == "sse" else HttpTransport
+        cls = HttpSseTransport if kind == "sse" else HttpTransport
         transport: Transport = cls(target[0], net=args.net, timeout=timeout, extra_headers=headers)
     else:
         if args.header or args.bearer_env:
@@ -387,7 +387,7 @@ def conformance_setup(args: argparse.Namespace) -> None:
     version = os.environ.get("MCP_CONFORMANCE_PROTOCOL_VERSION")
     if version:
         args.protocol_version = version
-        args.era = "modern" if versions.era_of(version) == "modern" else "legacy"
+        args.era = versions.era_of(version)
     scenario = os.environ.get("MCP_CONFORMANCE_SCENARIO", "")
     try:
         ctx = json.loads(os.environ.get("MCP_CONFORMANCE_CONTEXT") or "{}")

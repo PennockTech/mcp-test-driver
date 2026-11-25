@@ -35,6 +35,7 @@ new decision supersedes one.
 | [0013](decisions/0013-versions-and-releases.md) | Only the maintainer's release task changes the version or tags; Conventional Commits pick the number. |
 | [0014](decisions/0014-exclude-newer.md) | `exclude-newer = "3 days"` stays a relative duration. |
 | [0015](decisions/0015-human-in-the-loop.md) | No LLM is wired in; client capabilities are opt-in and answered by the person at the terminal. |
+| [0016](decisions/0016-era-names.md) | Eras are `handshake` and `stateless`, the transport is HTTP+SSE: names say how a thing works, never how old it is. |
 
 Record a new decision when a change sets a rule that later work must
 respect, or reverses one above: copy

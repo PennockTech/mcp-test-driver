@@ -5,7 +5,7 @@ Status: Accepted (2026-11-12)
 ## Context
 
 Stdio stderr, SSE response streams, the GET listening stream and the
-legacy SSE stream all deliver data while the user sits at a readline
+HTTP+SSE stream all deliver data while the user sits at a readline
 prompt.  Output written from another thread lands inside the prompt line
 and corrupts it.
 
