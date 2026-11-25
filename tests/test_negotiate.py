@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from mcp_test_driver.negotiate import ConnectOptions, StatelessRejected, connect
+from mcp_test_driver.negotiate import ConnectOptions, StatelessRejected, connect, implied_era
 from mcp_test_driver.protocol import META_PROTOCOL_VERSION, McpSession
 from mcp_test_driver.repl import Repl
 from mcp_test_driver.transport import HttpTransport, StdioTransport
@@ -47,6 +47,16 @@ def stdio_session(fake_stdio, log_path: Path) -> Iterator[Factory]:  # noqa: ANN
 def _codes(s: McpSession) -> set[str]:
     return {f.code for f in s.findings}
 
+
+@pytest.mark.parametrize(("version", "era"), [
+    ("2025-06-18", "handshake"),
+    ("2024-10-07", "handshake"),  # an alias of a known revision
+    ("2026-07-28", "stateless"),
+    ("2099-01-01", "auto"),  # unknown: settles nothing
+    (None, "auto"),
+])
+def test_implied_era(version: str | None, era: str) -> None:
+    assert implied_era(version) == era
 
 
 class TestStdioEras:

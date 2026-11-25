@@ -142,6 +142,19 @@ def switch_to_http_sse(session: McpSession) -> None:
     session.state.how_chosen.append(f"HTTP+SSE endpoint: {sanitize(new.endpoint or '?')}")
 
 
+def implied_era(version: str | None) -> EraChoice:
+    """The era to use when the user named a revision but no era.
+
+    A known revision belongs to exactly one era, so asking for it settles the
+    era.  Under "auto" the probe would run first, and a dual-era server would
+    answer it: the user would get the stateless era and not the revision they
+    asked for.  An unknown revision string settles nothing.
+    """
+    if version and versions.is_known(version):
+        return versions.era_of(version)
+    return "auto"
+
+
 def reconnect(session: McpSession) -> None:
     session.reconnect()
     connect(session, session.connect_options)

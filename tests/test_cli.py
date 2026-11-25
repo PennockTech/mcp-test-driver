@@ -142,6 +142,25 @@ class TestEndToEnd:
         assert "2026-07-28 via stateless requests" in r.stdout
         assert '"text": "new"' in r.stdout
 
+    DUAL = {"mode": "dual", "versions": ["2025-11-25", "2026-07-28"], "tools": SAMPLE_TOOLS}
+
+    def test_protocol_version_selects_its_era(self, fake_stdio) -> None:  # noqa: ANN001
+        # Under --era auto the probe would win, and the revision asked for would be ignored.
+        r = _run(["--no-trace", "--protocol-version", "2025-11-25", *fake_stdio(self.DUAL)])
+        assert "2025-11-25 via initialize handshake" in r.stdout
+        r = _run(["--no-trace", "--protocol-version", "2026-07-28", *fake_stdio(self.DUAL)])
+        assert "2026-07-28 via stateless requests" in r.stdout
+
+    def test_explicit_era_overrides_protocol_version(self, fake_stdio) -> None:  # noqa: ANN001
+        r = _run(["--no-trace", "--era", "stateless", "--protocol-version", "2025-11-25", *fake_stdio(self.DUAL)])
+        assert "2026-07-28 via stateless requests" in r.stdout
+        r = _run(["--no-trace", "--era", "auto", "--protocol-version", "2025-11-25", *fake_stdio(self.DUAL)])
+        assert "2026-07-28 via stateless requests" in r.stdout
+
+    def test_unknown_protocol_version_leaves_era_auto(self, fake_stdio) -> None:  # noqa: ANN001
+        r = _run(["--no-trace", "--protocol-version", "2099-01-01", *fake_stdio({"tools": SAMPLE_TOOLS})])
+        assert "via initialize handshake" in r.stdout
+
     def test_era_stateless_against_handshake_server_fails(self, fake_stdio) -> None:  # noqa: ANN001
         r = _run(["--no-trace", "--era", "stateless", "--probe-timeout", "1", *fake_stdio({"tools": SAMPLE_TOOLS})])
         assert r.returncode == 1 and "stateless" in r.stderr

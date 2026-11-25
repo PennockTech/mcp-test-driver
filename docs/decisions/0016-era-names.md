@@ -27,6 +27,10 @@ shipped these names, so they could change freely.
   that revision or its era (`RESOURCE_NOT_FOUND_HANDSHAKE`).  Comparing
   two revisions ("a later revision", "older than offered") is fine.
 - "Era" and "dual-era" stay: neither says which side is newer.
+- `--era` takes names only.  A year is not accepted as an alias: an era
+  spans several years, and a year reads as a choice of revision.  The
+  exact time input is `--protocol-version`, and a known revision selects
+  its era.
 
 ## Consequences
 

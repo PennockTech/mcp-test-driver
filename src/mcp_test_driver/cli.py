@@ -74,7 +74,7 @@ def _era_help() -> str:
         "  auto       probe server/discover, else initialize\n"
         f"  handshake  initialize only, {handshake[0]} to {handshake[-1]}\n"
         f"  stateless  per-request _meta only, from {stateless[0]}\n"
-        "default: auto"
+        "default: auto, or the era of --protocol-version"
     )
 
 
@@ -99,10 +99,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     g = p.add_argument_group("protocol")
     g.add_argument("--protocol-version", metavar="REV",
-                   help="revision to offer or request\n"
+                   help="revision to offer or request; a known revision also selects its era\n"
                    f"  default: {versions.LATEST_STATELESS} (stateless era)\n"
                    f"           {versions.LATEST_HANDSHAKE} (handshake era)")
-    g.add_argument("--era", choices=("auto", "handshake", "stateless"), default="auto", help=_era_help())
+    g.add_argument("--era", choices=("auto", "handshake", "stateless"), help=_era_help())
     g.add_argument("--probe-timeout", type=float, default=5.0, metavar="SECS",
                    help="how long --era auto waits for a server/discover reply (default 5)")
     g.add_argument("--timeout", type=float, default=None, metavar="SECS",
@@ -275,7 +275,7 @@ def make_transport(args: argparse.Namespace) -> Transport:
 
 
 def run_session(transport: Transport, args: argparse.Namespace, holder: list[Transport] | None = None) -> None:
-    from .negotiate import ConnectOptions, connect
+    from .negotiate import ConnectOptions, connect, implied_era
     from .protocol import McpError, McpSession
     from .diagnostics import print_findings
     from .repl import Repl
@@ -321,7 +321,8 @@ def run_session(transport: Transport, args: argparse.Namespace, holder: list[Tra
             sys.exit(1)
     try:
         try:
-            connect(session, ConnectOptions(era=args.era, version=args.protocol_version,
+            connect(session, ConnectOptions(era=args.era or implied_era(args.protocol_version),
+                                            version=args.protocol_version,
                                         probe_timeout=args.probe_timeout, listen=args.listen))
         finally:
             if holder is not None and session.transport is not transport:

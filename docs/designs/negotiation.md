@@ -21,8 +21,8 @@ What the spec requires is in [../mcp-spec-notes.md](../mcp-spec-notes.md)
 
 With `--era auto`:
 
-1. Send `server/discover` framed as the latest stateless revision (or
-   `--protocol-version`, if stateless), waiting `--probe-timeout` (5 s).
+1. Send `server/discover` framed as the latest stateless revision,
+   waiting `--probe-timeout` (5 s).
 2. A `DiscoverResult` means stateless: adopt the requested revision, or
    the highest mutual one from `supportedVersions`.
 3. `UnsupportedProtocolVersion` (`-32022`) means stateless: retry once
@@ -30,9 +30,9 @@ With `--era auto`:
 4. Anything else means handshake: another error, an HTTP 4xx without a
    stateless-era error body, silence, or the connection closing.  A stdio
    server that exited on the probe is restarted, with a finding.
-5. Handshake: `initialize`, offering the latest handshake revision (or
-   `--protocol-version`).  A counter-offer is accepted; an unknown
-   revision or an alias (`2024-10-07`) is used best-effort with a finding.
+5. Handshake: `initialize`, offering the latest handshake revision.  A
+   counter-offer is accepted; an unknown revision or an alias
+   (`2024-10-07`) is used best-effort with a finding.
 6. If `initialize` over Streamable HTTP gets 400, 404 or 405, switch to
    the 2024-11-05 HTTP+SSE transport and `initialize` again.  The SSE
    `endpoint` must be same-origin.
@@ -43,6 +43,12 @@ With `--era auto`:
 `--era handshake` starts at step 5; `--era stateless` fails instead of
 falling back; `--transport sse` skips the probe.  Every step is appended
 to `ServerState.how_chosen`, which the connection report prints.
+
+`--protocol-version REV` replaces "the latest" for its own era.  When
+`--era` is not given, a known revision also selects its era
+(`negotiate.implied_era`); otherwise the era is `auto`.  Without that
+rule a dual-era server would answer the probe, and the user would not get
+the revision they asked for.  An explicit `--era` always wins.
 
 The reasoning is in [decision 0002](../decisions/0002-dual-era-negotiation.md).
 
