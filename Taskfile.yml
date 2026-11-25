@@ -179,6 +179,26 @@ tasks:
         exit 1
       fi
 
+  release:check:
+    # The runner image and the Python that setup-python picks change between
+    # releases without any commit here, so green CI does not mean a tag push
+    # would build.  This dispatches the release build without publishing.
+    desc: "Dry-run the release build in GitHub Actions (default ref: main; or: task release:check -- REF)"
+    silent: true
+    env:
+      task_exe: "{{.TASK_EXE}}"
+      task_name: "{{.TASK}}"
+      ref: '{{.CLI_ARGS | default "main"}}'
+    cmd: |-2
+      set -euo pipefail
+      if ! command -v gh >/dev/null 2>&1; then
+        echo >&2 "${task_exe}: ${task_name}: needs the GitHub CLI (gh)"
+        exit 69 # EX_UNAVAILABLE
+      fi
+      gh workflow run release-check.yaml --ref "$ref"
+      echo "Dispatched the release check on ${ref@Q}.  Follow it with:  gh run watch"
+      echo "Push the release tag only once it passes."
+
   release:commits-and-tag:
     # Deliberately DOES NOT PUSH: a human must review for sanity.  Pushing the
     # tag runs .github/workflows/release.yaml, which publishes to PyPI.
@@ -239,7 +259,14 @@ tasks:
         vars:
           VERSION_OVERRIDE: ""
       - 'git commit -o $version_files -m "chore: bump hard-coded version to $(env VERSION_OVERRIDE="" "$task_exe" next-version:show)"'
-      - 'echo "Review, then publish with:  git push origin main ${release_version}"'
+      - |
+        cat <<EOM
+        Review, then publish, checking the release would build before the tag goes:
+          git push origin main
+          task release:check        # wait for it to pass
+          git push origin ${release_version}
+        The check builds main's tip, which differs from ${release_version} only in the version.
+        EOM
 
   _have_cargo_tool:*:  # shim for when the binary name == crate name
     internal: true
