@@ -23,12 +23,22 @@ task release:commits-and-tag                    # or VERSION_OVERRIDE=vX.Y.Z tas
 
 That commits the release version, makes a signed tag (an editor opens for
 its message), and commits the next dev version.  It never pushes.  Review,
-then:
+then push `main` first and check the release would build before pushing
+the tag:
 
 ```sh
-git push origin main vX.Y.Z
+git push origin main
+task release:check      # then `gh run watch`; wait for it to pass
+git push origin vX.Y.Z
 ```
 
 The tag push runs `.github/workflows/release.yaml`: it checks the tag
 against `pyproject.toml`, runs the tests, drafts a GitHub release and
-publishes to PyPI.
+publishes to PyPI.  Its build half is `release-build.yaml`, which
+`release-check.yaml` also runs, by hand only, publishing nothing and
+skipping only the tag comparison.  Green CI is not enough on its own: the
+runner image and the Python that `setup-python` picks change between
+releases with no commit here.  v0.2.0 failed that way, on a Python newer
+than any `gnureadline` wheel.  `task release:check -- REF` checks another
+branch.  GitHub only offers manual runs for workflows on the default
+branch.

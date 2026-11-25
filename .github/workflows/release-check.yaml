@@ -1,0 +1,29 @@
+# This workflow MUST be audited with zizmor.
+# This workflow SHOULD be using pinned action refs.
+
+# A dry run of the release build, to run by hand before pushing a tag:
+# `task release:check`, or "Run workflow" in the Actions tab.  The runner
+# image and the Python that setup-python picks drift between releases with
+# no commit here, so passing CI does not show that a release would build.
+#
+# It runs everything release.yaml's build does except comparing a tag with
+# the version, and publishes nothing.
+
+name: Release check (dry run)
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+
+  build:
+    name: Build as a release would
+
+    permissions:
+      contents: read  # to clone repo
+
+    uses: $/.github/workflows/release-build.yaml
+    with:
+      release-tag: ""
