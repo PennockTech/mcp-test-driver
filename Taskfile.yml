@@ -102,20 +102,18 @@ tasks:
         printf '%s\n' "$pure"
         exit 0
       fi
-      if convco check "${old}..HEAD" >/dev/null; then
-        # all commits were conventional
-        current="$(git describe)"
-        if [[ "$current" == "$old" ]]; then
-          # We are at the release, we bump to -dev
-          echo "$(convco version --pp --patch)-dev"
-        else
-          echo >&2 "${task_exe}: ${task_name}: error: ${old@Q}..${current@Q} has commits and were all conventional but failed to get a version bump"
-          exit 1
-        fi
-      else
-        # I have not been behaving
-        convco version --pp --patch
+      if [[ "$(git describe)" == "$old" ]]; then
+        # We are at the release, we bump to -dev
+        echo "$(convco version --pp --patch)-dev"
+        exit 0
       fi
+      # No commit since the tag earns a bump: either all are types convco does
+      # not bump for (ci, chore, docs, ...), or some are not conventional.
+      # Releasing anyway means a patch.
+      if ! convco check "${old}..HEAD" >/dev/null; then
+        echo >&2 "${task_exe}: ${task_name}: warning: non-conventional commits since ${old}; defaulting to a patch bump"
+      fi
+      convco version --pp --patch
 
   next-version:write:
     desc: Update pyproject.toml and uv.lock to the next version
