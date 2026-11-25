@@ -149,7 +149,7 @@ class TestTrust:
 # ── end to end, through FakeProxy ──────────────────────────────────────
 
 
-def _connect(url: str, net: NetConfig, era: str = "legacy") -> McpSession:
+def _connect(url: str, net: NetConfig, era: str = "handshake") -> McpSession:
     t = HttpTransport(url, net=net, timeout=10)
     t.trace = False
     s = McpSession(t)
@@ -215,8 +215,8 @@ class TestThroughProxy:
         with pytest.raises(TransportError):
             _connect(srv.url, NetConfig.from_env({}, proxy=proxy.url))
 
-    def test_legacy_sse_fallback_keeps_settings(self, fake_http, fake_proxy) -> None:  # noqa: ANN001
-        srv = fake_http({"tools": SAMPLE_TOOLS, "host": PROXIED_HOST, "legacy_sse": True})
+    def test_http_sse_fallback_keeps_settings(self, fake_http, fake_proxy) -> None:  # noqa: ANN001
+        srv = fake_http({"tools": SAMPLE_TOOLS, "host": PROXIED_HOST, "http_sse": True})
         proxy = fake_proxy()
         net = NetConfig.from_env({"HTTP_PROXY": proxy.url})
         s = _connect(srv.url, net)
@@ -250,7 +250,7 @@ class TestCli:
         srv = fake_http({"tools": SAMPLE_TOOLS, "host": PROXIED_HOST, "tls": _tls(test_certs)})
         proxy = fake_proxy()
         r = subprocess.run(
-            [sys.executable, "-m", "mcp_test_driver", "--no-trace", "--era", "legacy", "-c", "echo text=tunnelled",
+            [sys.executable, "-m", "mcp_test_driver", "--no-trace", "--era", "handshake", "-c", "echo text=tunnelled",
              srv.url],
             capture_output=True, text=True, timeout=60,
             env=_env_without_proxies(HTTPS_PROXY=proxy.url, MCP_TEST_DRIVER_CA_BUNDLE=str(test_certs.ca)),
@@ -266,7 +266,7 @@ class TestCli:
         proxy = fake_proxy(require_auth=("bob", "zq-pr0xy-77"))
         port = proxy.url.rsplit(":", 1)[1]
         r = subprocess.run(
-            [sys.executable, "-m", "mcp_test_driver", "--era", "legacy", "--proxy",
+            [sys.executable, "-m", "mcp_test_driver", "--era", "handshake", "--proxy",
              f"http://bob:zq-pr0xy-77@127.0.0.1:{port}", "-c", "echo text=hi", srv.url],
             capture_output=True, text=True, timeout=60, env=_env_without_proxies(),
         )

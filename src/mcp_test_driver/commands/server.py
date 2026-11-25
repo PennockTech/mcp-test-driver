@@ -267,7 +267,7 @@ def cmd_loglevel(repl: Repl, rest: str) -> None:
     level = words[0]
     if level not in LOG_LEVELS and level != "off":
         print(yellow(f"Note: {sanitize(level)!r} is not an RFC 5424 level; sending anyway."))
-    if repl.session.state.era == "modern" and not force_rpc:
+    if repl.session.state.era == "stateless" and not force_rpc:
         repl.session.log_level = None if level == "off" else level
         print(dim(f"Per-request log level: {repl.session.log_level or 'off'}."))
         return

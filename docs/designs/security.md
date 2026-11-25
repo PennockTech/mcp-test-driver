@@ -13,7 +13,7 @@ Assume the server is hostile.  Tests for these defences are in
 | Memory exhaustion | 16 MiB cap per stdio line, HTTP body and SSE stream; 1 MiB for fetched documents; 100-page cap on lists | `transport/base.py`, `fetch.py`, `protocol.py` |
 | Hanging the client | Read timeout (`--timeout`, 120 s) that holds mid-line; 10 s connect timeout | `transport/stdio.py`, `transport/http.py` |
 | SSRF by redirect | Redirects are never followed; a 3xx is an error | `transport/http.py`, `fetch.py` |
-| SSRF or credential theft by naming another host | Legacy SSE `endpoint` must be same-origin; metadata fetches are GET-only, HTTPS except loopback, with no credentials | `transport/legacy_sse.py`, `fetch.py` |
+| SSRF or credential theft by naming another host | The HTTP+SSE `endpoint` must be same-origin; metadata fetches are GET-only, HTTPS except loopback, with no credentials | `transport/http_sse.py`, `fetch.py` |
 | Header injection through a session ID or other value | CR, LF and NUL rejected in every header; session ID restricted to visible ASCII | `transport/base.py`, `transport/http.py` |
 | Response confusion with mismatched IDs | A response is matched by ID; strays are reported and never handed to a caller; IDs are never reused | `protocol.py` |
 | Stealing OAuth credentials (wrong audience, issuer mix-up, CSRF) | See below | `oauth.py` |

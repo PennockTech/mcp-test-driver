@@ -55,7 +55,7 @@ class TestAuthorizationCode:
     def test_cimd_login_on_first_401(self, fake_http) -> None:  # noqa: ANN001
         srv = fake_http({**SCEN, "oauth": {"cimd": True}})
         s, client = _session(srv)
-        connect(s, ConnectOptions(era="legacy"))
+        connect(s, ConnectOptions(era="handshake"))
         assert s.state.initialized and client.tokens is not None
         [auth] = _log(srv, "authorize")
         assert auth["client_id"] == CIMD_CLIENT_ID
@@ -70,21 +70,21 @@ class TestAuthorizationCode:
     def test_challenge_scope_wins(self, fake_http) -> None:  # noqa: ANN001
         srv = fake_http({**SCEN, "oauth": {"cimd": True, "challenge_scope": "mcp:special"}})
         s, _ = _session(srv)
-        connect(s, ConnectOptions(era="legacy"))
+        connect(s, ConnectOptions(era="handshake"))
         assert _log(srv, "authorize")[0]["scope"] == "mcp:special"
         s.transport.close()
 
     def test_offline_access_added_when_supported(self, fake_http) -> None:  # noqa: ANN001
         srv = fake_http({**SCEN, "oauth": {"cimd": True, "scopes_supported": ["mcp", "offline_access"]}})
         s, _ = _session(srv)
-        connect(s, ConnectOptions(era="legacy"))
+        connect(s, ConnectOptions(era="handshake"))
         assert _log(srv, "authorize")[0]["scope"].split() == ["mcp", "offline_access"]
         s.transport.close()
 
     def test_dynamic_registration(self, fake_http) -> None:  # noqa: ANN001
         srv = fake_http({**SCEN, "oauth": {"registration": True}})
         s, client = _session(srv)
-        connect(s, ConnectOptions(era="legacy"))
+        connect(s, ConnectOptions(era="handshake"))
         [reg] = _log(srv, "register")
         assert reg["application_type"] == "native" and reg["token_endpoint_auth_method"] == "none"
         assert client.registration and client.registration.via == "dcr"
@@ -98,14 +98,14 @@ class TestAuthorizationCode:
     def test_pre_registered_confidential(self, fake_http, methods: list[str], expected: str) -> None:  # noqa: ANN001
         srv = fake_http({**SCEN, "oauth": {"clients": {"c1": "s:1&"}, "auth_methods": methods}})
         s, _ = _session(srv, client_id="c1", client_secret="s:1&")
-        connect(s, ConnectOptions(era="legacy"))
+        connect(s, ConnectOptions(era="handshake"))
         assert _log(srv, "token")[0]["_auth_method"] == expected
         s.transport.close()
 
     def test_step_up_on_insufficient_scope(self, fake_http) -> None:  # noqa: ANN001
         srv = fake_http({**SCEN, "oauth": {"cimd": True, "tool_scopes": {"echo": "write"}}})
         s, _ = _session(srv)
-        connect(s, ConnectOptions(era="legacy"))
+        connect(s, ConnectOptions(era="handshake"))
         resp = s.call_tool("echo", {"text": "hi"})
         assert "result" in resp
         scopes = [a["scope"].split() for a in _log(srv, "authorize")]
@@ -115,7 +115,7 @@ class TestAuthorizationCode:
     def test_refresh_when_expired(self, fake_http) -> None:  # noqa: ANN001
         srv = fake_http({**SCEN, "oauth": {"cimd": True}})
         s, client = _session(srv)
-        connect(s, ConnectOptions(era="legacy"))
+        connect(s, ConnectOptions(era="handshake"))
         assert client.tokens is not None
         client.tokens.expires_at = time.time() - 1
         s.list_tools()
@@ -135,13 +135,13 @@ class TestRefusals:
         srv = fake_http({**SCEN, "oauth": {"cimd": True, **cfg}})
         s, _ = _session(srv)
         with pytest.raises(OAuthError, match=match):
-            connect(s, ConnectOptions(era="legacy"))
+            connect(s, ConnectOptions(era="handshake"))
         s.transport.close()
 
     def test_iss_correct_and_advertised(self, fake_http) -> None:  # noqa: ANN001
         srv = fake_http({**SCEN, "oauth": {"cimd": True, "iss_advertised": True}})
         s, _ = _session(srv)
-        connect(s, ConnectOptions(era="legacy"))
+        connect(s, ConnectOptions(era="handshake"))
         assert s.state.initialized
         s.transport.close()
 
@@ -149,7 +149,7 @@ class TestRefusals:
         srv = fake_http({**SCEN, "oauth": {}})
         s, _ = _session(srv)
         with pytest.raises(OAuthError, match="--client-id"):
-            connect(s, ConnectOptions(era="legacy"))
+            connect(s, ConnectOptions(era="handshake"))
         s.transport.close()
 
     def test_without_oauth_401_surfaces(self, fake_http) -> None:  # noqa: ANN001
@@ -157,14 +157,14 @@ class TestRefusals:
         t = HttpTransport(srv.url, timeout=10)
         t.trace = False
         with pytest.raises(AuthRequiredError):
-            connect(McpSession(t), ConnectOptions(era="legacy"))
+            connect(McpSession(t), ConnectOptions(era="handshake"))
 
 
 class TestOtherFlows:
     def test_client_credentials(self, fake_http) -> None:  # noqa: ANN001
         srv = fake_http({**SCEN, "oauth": {"clients": {"m2m": "sec"}}})
         s, _ = _session(srv, flow="client-credentials", client_id="m2m", client_secret="sec")
-        connect(s, ConnectOptions(era="legacy"))
+        connect(s, ConnectOptions(era="handshake"))
         [tok] = _log(srv, "token")
         assert tok["grant_type"] == "client_credentials" and tok["resource"] == srv.url
         assert not _log(srv, "authorize")
@@ -173,7 +173,7 @@ class TestOtherFlows:
     def test_device_grant(self, fake_http) -> None:  # noqa: ANN001
         srv = fake_http({**SCEN, "oauth": {"device": True}})
         s, _ = _session(srv, flow="device", client_id="public-cli")
-        connect(s, ConnectOptions(era="legacy"))
+        connect(s, ConnectOptions(era="handshake"))
         assert [t["grant_type"] for t in _log(srv, "token")][-1].endswith("device_code")
         assert "device-grant" in _codes(s)
         s.transport.close()
@@ -184,13 +184,13 @@ class TestCache:
         cache = tmp_path / "tokens.json"
         srv = fake_http({**SCEN, "oauth": {"cimd": True}})
         s, _ = _session(srv, token_cache=cache)
-        connect(s, ConnectOptions(era="legacy"))
+        connect(s, ConnectOptions(era="handshake"))
         assert stat.S_IMODE(cache.stat().st_mode) == 0o600
         assert srv.url in json.loads(cache.read_text())
         s.transport.close()
         s2, client2 = _session(srv, token_cache=cache)
         assert client2.tokens is not None
-        connect(s2, ConnectOptions(era="legacy"))
+        connect(s2, ConnectOptions(era="handshake"))
         assert len(_log(srv, "authorize")) == 1  # no second login
         s2.transport.close()
 
@@ -206,7 +206,7 @@ class TestCache:
 def test_repl_auth_commands(fake_http, capsys: pytest.CaptureFixture[str]) -> None:  # noqa: ANN001
     srv = fake_http({**SCEN, "oauth": {"cimd": True}})
     s, _ = _session(srv)
-    connect(s, ConnectOptions(era="legacy"))
+    connect(s, ConnectOptions(era="handshake"))
     r = Repl(s)
     r.handle_line("/auth status")
     out = capsys.readouterr().out

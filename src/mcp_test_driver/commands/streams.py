@@ -62,8 +62,8 @@ def _parse_listen(rest: str) -> tuple[float, dict[str, Any]]:
 def cmd_listen(repl: Repl, rest: str) -> None:
     secs, flt = _parse_listen(rest)
     session = repl.session
-    if session.state.era == "modern":
-        _listen_modern(repl, secs, flt)
+    if session.state.era == "stateless":
+        _listen_stateless(repl, secs, flt)
         return
     transport = session.transport
     opened = False
@@ -106,7 +106,7 @@ def _drain_for(repl: Repl, secs: float, stop_id: Any = None) -> bool:
     return False
 
 
-def _listen_modern(repl: Repl, secs: float, flt: dict[str, Any]) -> None:
+def _listen_stateless(repl: Repl, secs: float, flt: dict[str, Any]) -> None:
     session = repl.session
     req = session.build_request("subscriptions/listen", {"notifications": flt})
     sub_id = req["id"]

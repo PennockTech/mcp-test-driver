@@ -99,7 +99,7 @@ class TestInitialize:
         assert s.state.instructions == "be nice"
 
     def test_initialize_error_raises(self, session_factory) -> None:  # noqa: ANN001
-        s = session_factory({"mode": "modern", "versions": ["2026-07-28"]})
+        s = session_factory({"mode": "stateless", "versions": ["2026-07-28"]})
         with pytest.raises(McpError) as ei:
             s.initialize()
         assert "2026-07-28" in ei.value.message
@@ -197,9 +197,9 @@ def _wait_log(path: Path, method: str, tries: int = 50) -> list[dict]:
 
 
 class TestFraming:
-    def test_modern_meta(self, session_factory) -> None:  # noqa: ANN001
+    def test_stateless_meta(self, session_factory) -> None:  # noqa: ANN001
         s = session_factory({})
-        s.state.era = "modern"
+        s.state.era = "stateless"
         s.state.version = "2026-07-28"
         s.log_level = "debug"
         req = s.build_request("tools/list", None)

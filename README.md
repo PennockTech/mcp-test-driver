@@ -49,7 +49,7 @@ mcp> /help
 
 - **Speaks every MCP revision**, 2024-11-05 to 2026-07-28: the
   `initialize` handshake and the stateless protocol, over stdio,
-  Streamable HTTP and the older HTTP+SSE.  It works out which a server
+  Streamable HTTP and the 2024-11-05 HTTP+SSE.  It works out which a server
   speaks and tells you how it decided.
 - **Never hides a feature.**  The negotiated revision sets defaults and
   labels findings; you can always send anything, including methods the

@@ -11,15 +11,15 @@ import pytest
 from mcp_test_driver.negotiate import ConnectOptions, connect
 from mcp_test_driver.protocol import McpSession
 from mcp_test_driver.transport import HttpTransport, TransportError
-from mcp_test_driver.transport.legacy_sse import LegacySseTransport
+from mcp_test_driver.transport.http_sse import HttpSseTransport
 from tests.conftest import SAMPLE_TOOLS
 
-OLD = {"legacy_sse": True, "versions": ["2024-11-05"], "tools": SAMPLE_TOOLS}
+HTTP_SSE = {"http_sse": True, "versions": ["2024-11-05"], "tools": SAMPLE_TOOLS}
 
 
 def test_direct(fake_http) -> None:  # noqa: ANN001
-    srv = fake_http(OLD)
-    t = LegacySseTransport(srv.url, timeout=10)
+    srv = fake_http(HTTP_SSE)
+    t = HttpSseTransport(srv.url, timeout=10)
     t.trace = False
     assert t.endpoint == srv.url.replace("/mcp", "/messages?sid=1")
     s = McpSession(t)
@@ -31,21 +31,21 @@ def test_direct(fake_http) -> None:  # noqa: ANN001
 
 
 def test_auto_fallback_from_streamable_http(fake_http) -> None:  # noqa: ANN001
-    srv = fake_http(OLD)
+    srv = fake_http(HTTP_SSE)
     t = HttpTransport(srv.url, timeout=10)
     t.trace = False
     s = McpSession(t)
     connect(s, ConnectOptions(probe_timeout=2))
     assert s.transport.kind == "sse"
     assert any("HTTP+SSE" in h for h in s.state.how_chosen)
-    assert any(f.code == "legacy-sse-transport" for f in s.findings)
+    assert any(f.code == "http-sse-transport" for f in s.findings)
     assert [x["name"] for x in s.list_tools()] == ["echo"]
     s.transport.close()
 
 
-def test_server_request_over_legacy_sse(fake_http, tmp_path) -> None:  # noqa: ANN001
-    srv = fake_http({**OLD, "tool_scripts": {"echo": [{"request": {"method": "roots/list"}}, {"reply": {}}]}})
-    t = LegacySseTransport(srv.url, timeout=10)
+def test_server_request_over_http_sse(fake_http, tmp_path) -> None:  # noqa: ANN001
+    srv = fake_http({**HTTP_SSE, "tool_scripts": {"echo": [{"request": {"method": "roots/list"}}, {"reply": {}}]}})
+    t = HttpSseTransport(srv.url, timeout=10)
     t.trace = False
     s = McpSession(t)
     s.enable_roots(tmp_path)
@@ -56,12 +56,12 @@ def test_server_request_over_legacy_sse(fake_http, tmp_path) -> None:  # noqa: A
 
 
 def test_cross_origin_endpoint_refused(fake_http) -> None:  # noqa: ANN001
-    srv = fake_http({**OLD, "endpoint": "http://evil.example/steal"})
+    srv = fake_http({**HTTP_SSE, "endpoint": "http://evil.example/steal"})
     with pytest.raises(TransportError, match="another origin"):
-        LegacySseTransport(srv.url, timeout=5)
+        HttpSseTransport(srv.url, timeout=5)
 
 
 def test_not_an_sse_server(fake_http) -> None:  # noqa: ANN001
     srv = fake_http({"tools": SAMPLE_TOOLS})  # GET → 405
     with pytest.raises(TransportError, match="405"):
-        LegacySseTransport(srv.url, timeout=5)
+        HttpSseTransport(srv.url, timeout=5)

@@ -7,11 +7,12 @@ stateless per-request metadata (2026-07-28 onwards).  A dual-era client, per
 the backward-compatibility sections of 2026-07-28 basic/versioning and both
 transport pages, probes with `server/discover`:
 
-  - a DiscoverResult, or a recognised modern error (such as
+  - a DiscoverResult, or a recognised stateless-era error (such as
     UnsupportedProtocolVersion, which lists the supported versions), means
-    the server is modern: stay modern, picking a mutual version;
-  - any other error, an HTTP 4xx without a modern error body, or silence
-    means a legacy server: fall back to initialize.
+    the server speaks the stateless protocol: stay there, picking a
+    mutual version;
+  - any other error, an HTTP 4xx without a stateless-era error body, or silence
+    means a handshake-era server: fall back to initialize.
 
 The fallback is never keyed to one particular error code.  Every step is
 recorded in ServerState.how_chosen for the start-up report.
@@ -37,10 +38,10 @@ from .transport import (
 if TYPE_CHECKING:
     from .protocol import McpSession
 
-EraChoice = Literal["auto", "legacy", "modern"]
+EraChoice = Literal["auto", "handshake", "stateless"]
 
-# Codes only a modern server sends; seeing one means "modern, adjust and retry".
-MODERN_ERROR_CODES = {
+# Codes only a stateless-era server sends; seeing one means "stateless era, adjust and retry".
+STATELESS_ERROR_CODES = {
     versions.UNSUPPORTED_PROTOCOL_VERSION,
     versions.MISSING_REQUIRED_CLIENT_CAPABILITY,
     versions.HEADER_MISMATCH,
@@ -52,7 +53,7 @@ DEFAULT_PROBE_TIMEOUT = 5.0
 @dataclass
 class ConnectOptions:
     era: EraChoice = "auto"
-    # Revision to offer (legacy) or request (modern); None = latest of that era.
+    # Revision to offer (handshake) or request (stateless); None = latest of that era.
     version: str | None = None
     probe_timeout: float = DEFAULT_PROBE_TIMEOUT
     # Handshake era over Streamable HTTP: open the GET stream after connecting,
@@ -60,13 +61,13 @@ class ConnectOptions:
     listen: bool = True
 
 
-class ModernRejected(ConnectionError):
-    """--era modern was requested but the server is not modern."""
+class StatelessRejected(ConnectionError):
+    """--era stateless was requested but the server does not speak it."""
 
 
 @dataclass
 class _Probe:
-    modern: bool
+    stateless: bool
     reason: str
 
 
@@ -74,12 +75,12 @@ def connect(session: McpSession, options: ConnectOptions | None = None) -> None:
     """Establish the protocol over an already-open transport."""
     opts = options or ConnectOptions()
     session.connect_options = opts
-    if opts.era != "legacy" and session.transport.kind != "sse":
-        probe = probe_modern(session, opts)
-        if probe.modern:
+    if opts.era != "handshake" and session.transport.kind != "sse":
+        probe = probe_stateless(session, opts)
+        if probe.stateless:
             return
-        if opts.era == "modern":
-            raise ModernRejected(f"server did not accept the stateless protocol ({probe.reason})")
+        if opts.era == "stateless":
+            raise StatelessRejected(f"server did not accept the stateless protocol ({probe.reason})")
         session.state.how_chosen.append(f"falling back to initialize: {probe.reason}")
         session.reset_to_handshake()
     _initialize(session, opts)
@@ -88,20 +89,20 @@ def connect(session: McpSession, options: ConnectOptions | None = None) -> None:
 def _initialize(session: McpSession, opts: ConnectOptions) -> None:
     """initialize, falling back from Streamable HTTP to HTTP+SSE as 2025-03-26 describes."""
     try:
-        session.initialize(_legacy_version(opts))
+        session.initialize(_handshake_version(opts))
     except HttpStatusError as e:
         if session.transport.kind != "http" or e.status not in (400, 404, 405) or e.messages:
             raise
         session.state.how_chosen.append(
             f"initialize over Streamable HTTP got HTTP {e.status}; trying the 2024-11-05 HTTP+SSE transport"
         )
-        switch_to_legacy_sse(session)
-        session.initialize(_legacy_version(opts))
+        switch_to_http_sse(session)
+        session.initialize(_handshake_version(opts))
     if opts.listen and session.transport.kind == "http":
         _open_get_stream(session)
     if session.transport.kind == "sse":
         session.findings.deprecated(
-            "legacy-sse-transport",
+            "http-sse-transport",
             "server uses the HTTP+SSE transport, deprecated since 2025-03-26",
             "basic/transports#backwards-compatibility",
         )
@@ -122,12 +123,12 @@ def _open_get_stream(session: McpSession) -> None:
     session.state.how_chosen.append("GET listening stream: open")
 
 
-def switch_to_legacy_sse(session: McpSession) -> None:
-    from .transport.legacy_sse import LegacySseTransport
+def switch_to_http_sse(session: McpSession) -> None:
+    from .transport.http_sse import HttpSseTransport
 
     old = session.transport
     url = getattr(old, "url")
-    new = LegacySseTransport(
+    new = HttpSseTransport(
         url,
         net=getattr(old, "net", None),
         timeout=getattr(old, "timeout", 120.0),
@@ -141,35 +142,48 @@ def switch_to_legacy_sse(session: McpSession) -> None:
     session.state.how_chosen.append(f"HTTP+SSE endpoint: {sanitize(new.endpoint or '?')}")
 
 
+def implied_era(version: str | None) -> EraChoice:
+    """The era to use when the user named a revision but no era.
+
+    A known revision belongs to exactly one era, so asking for it settles the
+    era.  Under "auto" the probe would run first, and a dual-era server would
+    answer it: the user would get the stateless era and not the revision they
+    asked for.  An unknown revision string settles nothing.
+    """
+    if version and versions.is_known(version):
+        return versions.era_of(version)
+    return "auto"
+
+
 def reconnect(session: McpSession) -> None:
     session.reconnect()
     connect(session, session.connect_options)
 
 
-def _legacy_version(opts: ConnectOptions) -> str | None:
+def _handshake_version(opts: ConnectOptions) -> str | None:
     if opts.version and versions.era_of(opts.version) == "handshake":
         return opts.version
     return None
 
 
-def _modern_version(opts: ConnectOptions) -> str:
-    if opts.version and versions.era_of(opts.version) == "modern":
+def _stateless_version(opts: ConnectOptions) -> str:
+    if opts.version and versions.era_of(opts.version) == "stateless":
         return opts.version
-    return versions.LATEST_MODERN
+    return versions.LATEST_STATELESS
 
 
 def _choose(supported: list[str], wanted: str) -> str | None:
     """The best version we both speak, preferring the one we asked for."""
     if wanted in supported:
         return wanted
-    mutual = [v for v in supported if versions.is_known(v) and versions.era_of(v) == "modern"]
+    mutual = [v for v in supported if versions.is_known(v) and versions.era_of(v) == "stateless"]
     return max(mutual) if mutual else None
 
 
-def probe_modern(session: McpSession, opts: ConnectOptions) -> _Probe:
-    wanted = _modern_version(opts)
+def probe_stateless(session: McpSession, opts: ConnectOptions) -> _Probe:
+    wanted = _stateless_version(opts)
     for attempt in range(2):
-        session.state.era = "modern"
+        session.state.era = "stateless"
         session.state.version = wanted
         session.apply_wire()
         req = session.build_request("server/discover", None)
@@ -179,11 +193,11 @@ def probe_modern(session: McpSession, opts: ConnectOptions) -> _Probe:
             session.transport.send(req)
             resp = session.wait_for(req_id, timeout=opts.probe_timeout)
         except HttpStatusError as e:
-            resp = _modern_error_in(e.messages)
+            resp = _stateless_error_in(e.messages)
             if resp is None:
-                return _Probe(False, f"HTTP {e.status} to server/discover without a modern error")
+                return _Probe(False, f"HTTP {e.status} to server/discover without a stateless-era error")
         except ReceiveTimeout:
-            # A legacy server may ignore unknown pre-initialize requests; any
+            # A handshake-era server may ignore unknown pre-initialize requests; any
             # late reply must not be mistaken for something else.
             session._abandoned.add(req_id)
             return _Probe(False, f"no reply to server/discover within {opts.probe_timeout:g}s")
@@ -211,7 +225,7 @@ def probe_modern(session: McpSession, opts: ConnectOptions) -> _Probe:
                     f"server/discover answered a {wanted} request but supportedVersions omits it",
                     "basic/versioning",
                 )
-            session.adopt_modern(chosen, result, note)
+            session.adopt_stateless(chosen, result, note)
             session._observe_result("server/discover", resp)
             return _Probe(True, "")
         code = err.get("code")
@@ -227,16 +241,16 @@ def probe_modern(session: McpSession, opts: ConnectOptions) -> _Probe:
                 return _Probe(False, "server lists no stateless revision this client knows")
             wanted = chosen
             continue
-        if code in MODERN_ERROR_CODES:
-            session.state.how_chosen.append(f"server/discover: modern error {code}")
-            return _Probe(False, f"modern server rejected server/discover ({sanitize(str(err.get('message')))})")
+        if code in STATELESS_ERROR_CODES:
+            session.state.how_chosen.append(f"server/discover: stateless-era error {code}")
+            return _Probe(False, f"stateless-era server rejected server/discover ({sanitize(str(err.get('message')))})")
         return _Probe(False, f"server/discover answered with error {sanitize(str(code))}")
     return _Probe(False, "no mutually supported stateless revision")
 
 
-def _modern_error_in(msgs: list[Any]) -> JsonObject | None:
+def _stateless_error_in(msgs: list[Any]) -> JsonObject | None:
     for m in msgs:
         err = as_obj(as_obj(m).get("error"))
-        if err.get("code") in MODERN_ERROR_CODES:
+        if err.get("code") in STATELESS_ERROR_CODES:
             return as_obj(m)
     return None

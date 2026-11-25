@@ -122,7 +122,7 @@ def _method_probe(method: str, params: dict[str, Any] | None = None, cap: tuple[
 
     A result, or -32602 (the method exists but disliked our params), means
     yes; -32601 or silence means no; any other error is unclear (e.g. "not
-    initialized" from a legacy server sent a stateless-era method).
+    initialized" from a handshake-era server sent a stateless-era method).
     "Claimed" means the negotiated revision defines the method and, for
     optional features, the server advertised the capability (`cap` path).
     """
@@ -279,10 +279,10 @@ def check_resource_not_found(ctx: Context) -> Result:
     resp = _call(ctx, "resources/read", {"uri": _NO_SUCH_URI})
     code = as_obj(resp.get("error")).get("code")
     title = "missing resource gets the right error"
-    want = -32602 if ctx.spec.era == "modern" else versions.RESOURCE_NOT_FOUND_LEGACY
+    want = -32602 if ctx.spec.era == "stateless" else versions.RESOURCE_NOT_FOUND_HANDSHAKE
     if code == want:
         return Result("sep-2164-resource-not-found", title, Outcome.PASS, str(code))
-    if code in (-32602, versions.RESOURCE_NOT_FOUND_LEGACY):
+    if code in (-32602, versions.RESOURCE_NOT_FOUND_HANDSHAKE):
         return Result("sep-2164-resource-not-found", title, Outcome.WARN, f"{code}; {ctx.spec.name} expects {want}")
     return Result("sep-2164-resource-not-found", title, Outcome.FAIL, f"got {code if resp.get('error') else 'a result'}")
 
@@ -330,7 +330,7 @@ def _list_check(cid: str, kind: str, cap: str) -> Probe:
 
 def check_caching(ctx: Context) -> Result:
     title = "list results carry ttlMs and cacheScope"
-    if ctx.spec.era != "modern":
+    if ctx.spec.era != "stateless":
         return Result("caching", title, Outcome.SKIP, "handshake era")
     missing = [f for f in ctx.session.findings if f.code == "missing-cache-fields"]
     return Result("caching", title, Outcome.FAIL if missing else Outcome.PASS,
@@ -421,13 +421,11 @@ def probe_versions(session: McpSession) -> list[tuple[str, str]]:
     original = session.connect_options
     rows: list[tuple[str, str]] = []
     for v in versions.KNOWN_VERSIONS:
-        era = versions.era_of(v)
         session.reconnect()
         try:
-            connect(session, ConnectOptions(era="modern" if era == "modern" else "legacy", version=v,
-                                            probe_timeout=PROBE_TIMEOUT))
+            connect(session, ConnectOptions(era=versions.era_of(v), version=v, probe_timeout=PROBE_TIMEOUT))
             got = session.state.version or "?"
-            via = "stateless" if session.state.era == "modern" else "initialize"
+            via = "stateless" if session.state.era == "stateless" else "initialize"
             rows.append((v, f"{got} via {via}" + ("" if got == v else "  (counter-offer)")))
         except (McpError, TransportError, ConnectionError) as e:
             rows.append((v, f"refused: {e}"))

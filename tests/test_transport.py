@@ -52,7 +52,7 @@ class TestStdioTransport:
         return t
 
     def test_round_trip(self, fake_stdio) -> None:  # noqa: ANN001
-        t = self._start(fake_stdio, {"mode": "legacy"})
+        t = self._start(fake_stdio, {"mode": "handshake"})
         t.send(_req(1, "initialize", {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "x", "version": "1"}}))
         msg = t.receive()
         assert msg["id"] == 1 and msg["result"]["protocolVersion"] == "2025-11-25"
@@ -157,7 +157,7 @@ class TestStdioTransport:
         t.close()
 
     def test_trace(self, fake_stdio, capsys: pytest.CaptureFixture[str]) -> None:  # noqa: ANN001
-        t = self._start(fake_stdio, {"mode": "legacy", "on_unknown_pre_init": "error"})
+        t = self._start(fake_stdio, {"mode": "handshake", "on_unknown_pre_init": "error"})
         t.trace = True
         t.send(_req(1, "tools/list"))
         t.receive()

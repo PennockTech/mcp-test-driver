@@ -1,6 +1,6 @@
 # Copyright 2026 Phil Pennock — see LICENSE file.
 
-"""Transports carrying MCP JSON-RPC messages: stdio, Streamable HTTP, legacy SSE."""
+"""Transports carrying MCP JSON-RPC messages: stdio, Streamable HTTP, HTTP+SSE."""
 
 from __future__ import annotations
 

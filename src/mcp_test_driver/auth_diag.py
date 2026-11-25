@@ -181,7 +181,7 @@ def discover(
     if disc.prm is None:
         log.violation("auth-no-prm", "no Protected Resource Metadata found (RFC 9728, required since 2025-06-18)",
                       "basic/authorization#authorization-server-discovery")
-        _legacy_fallback(disc, mcp_url, log, fetcher, headers)
+        _origin_metadata_fallback(disc, mcp_url, log, fetcher, headers)
         return disc
     _check_prm(disc, mcp_url, log)
 
@@ -204,7 +204,7 @@ def discover(
     return disc
 
 
-def _legacy_fallback(disc: AuthDiscovery, mcp_url: str, log: DiagnosticLog, fetcher: JsonFetcher,
+def _origin_metadata_fallback(disc: AuthDiscovery, mcp_url: str, log: DiagnosticLog, fetcher: JsonFetcher,
                      headers: dict[str, str]) -> None:
     """2025-03-26: AS metadata at the MCP server's origin, else default endpoints."""
     origin = _origin(mcp_url)

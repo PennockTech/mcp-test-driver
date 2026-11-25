@@ -70,7 +70,7 @@ def print_report(
             print(f"  network    {sanitize(line)}")
     if session.transport.session_id:
         print(f"  session    Mcp-Session-Id {sanitize(session.transport.session_id)}")
-    era = "stateless (modern)" if state.era == "modern" else "initialize handshake"
+    era = "stateless requests" if state.era == "stateless" else "initialize handshake"
     version = state.version or "?"
     known = "" if versions.is_known(version) else yellow("  (unknown to this client)")
     print(f"  protocol   {bold(version)} via {era}{known}")

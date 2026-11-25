@@ -89,9 +89,9 @@ class TestHelpers:
         assert list(versions.KNOWN_VERSIONS) == sorted(versions.KNOWN_VERSIONS)
         assert versions.LATEST == "2026-07-28"
         assert versions.LATEST_HANDSHAKE == "2025-11-25"
-        assert versions.LATEST_MODERN == "2026-07-28"
+        assert versions.LATEST_STATELESS == "2026-07-28"
         assert versions.era_of("2025-06-18") == "handshake"
-        assert versions.era_of("2026-07-28") == "modern"
+        assert versions.era_of("2026-07-28") == "stateless"
 
     def test_alias(self) -> None:
         assert versions.get("2024-10-07") is versions.V2024_11_05

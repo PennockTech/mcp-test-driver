@@ -16,7 +16,7 @@ src/mcp_test_driver/
   negotiate.py   era and revision selection; fallback to initialize, then HTTP+SSE
   versions.py    registry of spec revisions: methods, capabilities, features
   messages.py    JSON-RPC message shapes; classify() and batch expansion
-  transport/     stdio, Streamable HTTP, legacy HTTP+SSE, SSE parser, x-mcp-header
+  transport/     stdio, Streamable HTTP, HTTP+SSE, SSE parser, x-mcp-header
   handlers.py    registry of client-side handlers for server requests (roots/list, ...)
   interactive.py elicitation and sampling handlers (interactive and automatic)
   tasks.py       tasks: 2025-11-25 core and the 2026 extension
